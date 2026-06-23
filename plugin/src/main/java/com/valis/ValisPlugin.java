@@ -33,6 +33,11 @@ public class ValisPlugin extends JavaPlugin {
         config = new ValisConfig(this);
 
         // Verify dependencies
+        if (getServer().getPluginManager().getPlugin("Citizens") == null) {
+            log.severe("Citizens plugin not found! Disabling...");
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
         if (getServer().getPluginManager().getPlugin("ProtocolLib") == null) {
             log.severe("ProtocolLib not found! Disabling...");
             getServer().getPluginManager().disablePlugin(this);

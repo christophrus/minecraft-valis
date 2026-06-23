@@ -3,12 +3,11 @@ package com.valis.execution;
 import com.google.gson.JsonObject;
 import com.valis.ValisPlugin;
 import com.valis.agent.VirtualAgent;
+import net.citizensnpcs.api.npc.NPC;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
-import org.bukkit.entity.ArmorStand;
-import org.bukkit.util.Vector;
 
 import java.util.logging.Logger;
 
@@ -57,32 +56,19 @@ public class ActionExecutor {
     }
 
     /**
-     * Move the agent toward a target position via teleport steps.
+     * Navigate the NPC to a target position using Citizens pathfinding.
      */
     private void moveTo(JsonObject params) {
         int x = params.get("x").getAsInt();
         int y = params.get("y").getAsInt();
         int z = params.get("z").getAsInt();
 
-        ArmorStand entity = agent.getEntity();
-        if (entity != null && entity.isValid()) {
-            Location current = entity.getLocation();
-            Location target = new Location(current.getWorld(), x + 0.5, y, z + 0.5);
-
-            // Move in steps toward target (5 blocks per tick max)
-            Vector direction = target.toVector().subtract(current.toVector());
-            double distance = direction.length();
-            if (distance > 5) {
-                direction.normalize().multiply(5);
-                target = current.clone().add(direction);
-            }
-
-            // Face the movement direction
-            target.setDirection(direction);
-            agent.teleport(target);
-
+        NPC npc = agent.getNpc();
+        if (npc != null && npc.isSpawned()) {
+            Location target = new Location(npc.getStoredLocation().getWorld(), x + 0.5, y, z + 0.5);
+            npc.getNavigator().setTarget(target);
             plugin.getWsBridge().sendActionResult(agent.getAgentName(), "move_to",
-                    true, "moved toward " + x + "," + y + "," + z);
+                    true, "navigating to " + x + "," + y + "," + z);
         }
     }
 
@@ -141,19 +127,19 @@ public class ActionExecutor {
     }
 
     /**
-     * Make the agent look at a target position.
+     * Make the NPC look at a target position.
      */
     private void lookAt(JsonObject params) {
         int x = params.get("x").getAsInt();
         int y = params.get("y").getAsInt();
         int z = params.get("z").getAsInt();
 
-        ArmorStand entity = agent.getEntity();
-        if (entity != null && entity.isValid()) {
-            Location from = entity.getLocation();
+        NPC npc = agent.getNpc();
+        if (npc != null && npc.isSpawned()) {
+            Location from = npc.getStoredLocation();
             Location to = new Location(from.getWorld(), x, y, z);
             from.setDirection(to.toVector().subtract(from.toVector()));
-            entity.teleport(from);
+            npc.teleport(from, null);
         }
     }
 

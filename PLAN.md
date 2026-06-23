@@ -51,7 +51,7 @@
 - **Agent Scale**: Medium (20-100 concurrent agents)
 - **Server**: PaperMC (latest stable)
 - **Agent Brain Language**: Python (best LLM ecosystem)
-- **NPC System**: Citizens2 API
+- **NPC System**: Citizens2 API (Build 4210, kompatibel mit PaperMC 26.1.2 via `v26_1_R1` NMS-Modul)
 
 ## Folder Structure
 
@@ -156,3 +156,28 @@ minecraft-valis/
 - Full crafting recipe tree (core items first)
 - Currency-based economy
 - Cross-server agent migration
+
+## Citizens2 Compatibility Analysis (2026-06-24)
+
+**Status**: ✅ **SOLVED** — PaperMC 26.1.2 + Citizens2 Build 4210 funktionieren!
+
+**Root cause analysis**: Citizens2 `NMS.loadBridge()` wählt das NMS-Modul basierend auf `SpigotUtil.getVersion()`:
+```java
+case 21:
+    if (version[2] < 9)       rev = "v1_21_R5";   // Paper 1.21.x
+    ...
+switch (version[0]) {
+    case 26:
+    case 27:
+        rev = "v26_" + version[1] + "_R1";         // Paper 26.x ← DAS!
+}
+```
+
+PaperMC 26.1.2 → `version[0]=26, version[1]=1` → `v26_1_R1` ✅  
+PaperMC 1.21.4 → `version[0]=1, version[1]=21, version[2]=4` → `v1_21_R5` ❌ (nicht in JAR)
+
+**Server-Konfiguration**:
+- PaperMC: 26.1.2 Build #72
+- Java: JDK 25+ (Eclipse Adoptium Temurin-25)
+- Plugin-API: `1.21.4-R0.1-SNAPSHOT` (Bukkit-API ist rückwärtskompatibel)
+- Gradle: `JAVA_HOME=C:\Program Files\Zulu\zulu-21` für Build, JDK 25 für Runtime

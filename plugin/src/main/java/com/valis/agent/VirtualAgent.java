@@ -4,22 +4,19 @@ import com.google.gson.JsonObject;
 import com.valis.ValisPlugin;
 import com.valis.execution.ActionExecutor;
 import com.valis.perception.WorldObserver;
+import net.citizensnpcs.api.CitizensAPI;
+import net.citizensnpcs.api.npc.NPC;
+import net.citizensnpcs.api.npc.NPCRegistry;
+import net.citizensnpcs.trait.SkinTrait;
 import org.bukkit.Location;
-import org.bukkit.World;
-import org.bukkit.entity.ArmorStand;
-import org.bukkit.inventory.ItemStack;
-import org.bukkit.Material;
+import org.bukkit.entity.EntityType;
 import org.bukkit.scheduler.BukkitTask;
-import org.bukkit.util.EulerAngle;
 
 import java.util.logging.Logger;
 
 /**
- * Manages a single AI agent as an armor stand entity with a player head
- * in the Minecraft world.
- *
- * Citizens proved incompatible with PaperMC 1.21.1, so we use a
- * lightweight approach: invisible armor stand + player head = visible agent.
+ * Manages a single AI agent as a Citizens NPC.
+ * PaperMC 26.1.2 + Citizens2 build 4210 (v26_1_R1 module).
  */
 public class VirtualAgent {
 
@@ -29,7 +26,7 @@ public class VirtualAgent {
     private final String personality;
     private final Location spawnLocation;
 
-    private ArmorStand entity;
+    private NPC npc;
     private BukkitTask perceptionTask;
     private final WorldObserver observer;
     private final ActionExecutor executor;
@@ -45,52 +42,21 @@ public class VirtualAgent {
         this.executor = new ActionExecutor(plugin, this);
     }
 
-    /**
-     * Spawn the agent entity in the world.
-     */
     public void spawn() {
-        World world = spawnLocation.getWorld();
-        if (world == null) {
-            log.severe("Cannot spawn agent " + name + ": world is null");
-            return;
-        }
-
-        entity = world.spawn(spawnLocation, ArmorStand.class);
-
-        // Configure appearance to look like a player
-        entity.setVisible(true);
-        entity.setCustomName(name);
-        entity.setCustomNameVisible(true);
-        entity.setGravity(true);
-        entity.setBasePlate(false);
-        entity.setArms(false);
-        entity.setSmall(false);
-
-        // Put a player head on the armor stand
-        var head = new ItemStack(Material.PLAYER_HEAD);
-        entity.getEquipment().setHelmet(head);
-
-        entity.setHeadPose(new EulerAngle(0, 0, 0));
-
-        log.info("Agent entity spawned: " + name);
+        NPCRegistry registry = CitizensAPI.getNPCRegistry();
+        npc = registry.createNPC(EntityType.PLAYER, name);
+        npc.getOrAddTrait(SkinTrait.class).setSkinName("Steve");
+        npc.spawn(spawnLocation);
+        npc.data().set(NPC.Metadata.NAMEPLATE_VISIBLE, true);
+        npc.data().set(NPC.Metadata.GLOWING, false);
+        log.info("NPC spawned: " + name);
     }
 
-    /**
-     * Remove the agent entity from the world.
-     */
     public void despawn() {
-        if (perceptionTask != null) {
-            perceptionTask.cancel();
-        }
-        if (entity != null && entity.isValid()) {
-            entity.remove();
-        }
-        entity = null;
+        if (perceptionTask != null) perceptionTask.cancel();
+        if (npc != null) { npc.despawn(); npc.destroy(); }
     }
 
-    /**
-     * Start the periodic perception loop.
-     */
     public void startPerceptionLoop() {
         int interval = plugin.getValisConfig().getPerceptionIntervalTicks();
         perceptionTask = plugin.getServer().getScheduler().runTaskTimer(plugin, () -> {
@@ -100,45 +66,26 @@ public class VirtualAgent {
         }, 0L, interval);
     }
 
-    /**
-     * Execute an action from the agent brain.
-     */
     public void executeAction(String action, JsonObject params) {
         executor.execute(action, params);
     }
 
-    /**
-     * Send a chat message as this agent.
-     */
     public void sendChat(String text) {
-        if (entity != null && entity.isValid()) {
-            Location loc = entity.getLocation();
-            if (loc.getWorld() != null) {
-                String formatted = "§7[§b" + name + "§7]§f " + text;
+        if (npc != null && npc.isSpawned()) {
+            var loc = npc.getStoredLocation();
+            if (loc != null && loc.getWorld() != null) {
                 loc.getWorld().getPlayers().forEach(player ->
-                    player.sendMessage(formatted)
+                    player.sendMessage("§7[§b" + name + "§7]§f " + text)
                 );
             }
         }
     }
 
-    /** Teleport the entity to a new location. */
-    public void teleport(Location location) {
-        if (entity != null && entity.isValid()) {
-            entity.teleport(location);
-        }
-    }
-
-    // --- Getters ---
-
     public String getAgentName() { return name; }
     public String getPersonality() { return personality; }
-    public ArmorStand getEntity() { return entity; }
+    public NPC getNpc() { return npc; }
     public Location getLocation() {
-        if (entity != null && entity.isValid()) {
-            return entity.getLocation();
-        }
-        return spawnLocation;
+        return npc != null && npc.isSpawned() ? npc.getStoredLocation() : spawnLocation;
     }
     public WorldObserver getObserver() { return observer; }
     public int getTickCounter() { return tickCounter; }
