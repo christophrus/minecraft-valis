@@ -13,6 +13,8 @@ A **PaperMC Java server plugin** manages NPC agents in Minecraft. A **Python age
 
 See [PLAN.md](PLAN.md) for the full implementation roadmap.
 
+**[→ Setup & Testanleitung (Phase 1)](SETUP.md)**
+
 ## Quick Start
 
 ### Prerequisites
