@@ -1,10 +1,10 @@
 """
 Multi-provider LLM abstraction layer.
-Supports OpenAI, Anthropic Claude, and Ollama (local models).
+Supports OpenAI, Anthropic Claude, DeepSeek, and Ollama (local models).
 
 Usage:
     from llm.providers import create_llm
-    llm = create_llm("openai", model="gpt-4o")
+    llm = create_llm("deepseek", model="deepseek-chat")
     response = await llm.chat([{"role": "user", "content": "Hello!"}])
 """
 
@@ -149,6 +149,21 @@ class OllamaProvider(LLMProvider):
         return data["embedding"]
 
 
+class DeepSeekProvider(OpenAIProvider):
+    """DeepSeek API provider — OpenAI-compatible API.
+
+    Models: deepseek-chat (V3), deepseek-reasoner (R1).
+    Base URL: https://api.deepseek.com
+    """
+
+    def __init__(self, config: LLMConfig):
+        if not config.base_url:
+            config.base_url = "https://api.deepseek.com"
+        if not config.model:
+            config.model = "deepseek-chat"
+        super().__init__(config)
+
+
 def _fallback_embed(text: str) -> list[float]:
     """Simple fallback embedding using character n-gram hashing."""
     import hashlib
@@ -175,10 +190,14 @@ def create_llm(provider: str, **kwargs) -> LLMProvider:
             config.api_key = __import__("os").getenv("OPENAI_API_KEY", "")
         elif provider == "anthropic":
             config.api_key = __import__("os").getenv("ANTHROPIC_API_KEY", "")
+        elif provider == "deepseek":
+            config.api_key = __import__("os").getenv("DEEPSEEK_API_KEY", "")
 
     match provider:
         case "openai":
             return OpenAIProvider(config)
+        case "deepseek":
+            return DeepSeekProvider(config)
         case "anthropic":
             return AnthropicProvider(config)
         case "ollama":

@@ -15,7 +15,7 @@
 | NPC-System | Citizens2 (Build 4210) | A*-Pathfinding, Player-Skins, getestet |
 | Agent Brain | Python 3.11+ (asyncio) | Bestes LLM-Ökosystem |
 | Plugin-Bridge | WebSocket (java-websocket ↔ Python websockets) | Bidirektional, JSON-Protokoll |
-| LLM-Backend | Ollama (Mistral 7B) / OpenAI / Anthropic | Multi-Provider, konfigurierbar. Default: Ollama lokal |
+| LLM-Backend | Ollama (Mistral 7B) / DeepSeek / OpenAI / Anthropic | Multi-Provider. Default: Ollama lokal. DeepSeek empfohlen für Qualität+Kosten. |
 | Plugin-API | `paper-api:1.21.4-R0.1-SNAPSHOT` | Paper 26.x API nicht in Maven; 1.21.4 rückwärtskompatibel |
 
 ---
@@ -129,7 +129,7 @@ Copy-Item "build\libs\valis-core-0.1.0-SNAPSHOT.jar" "..\server\plugins\" -Force
 |-------|-------|
 | `main.py` | Async-Einstiegspunkt, WebSocket-Connect, Tick-Loop |
 | `agent.py` | `ValisAgent` + `AgentManager` (Cognitive Loop) |
-| `llm/providers.py` | Multi-LLM: OpenAI, Anthropic, Ollama |
+| `llm/providers.py` | Multi-LLM: OpenAI, Anthropic, DeepSeek, Ollama |
 | `memory/memory_stream.py` | Assoziativer Memory (SQLite + Embeddings) |
 | `memory/retrieval.py` | Gewichtete Retrieval (Recency × Relevance × Importance) |
 | `cognitive/controller.py` | PIANO Cognitive Controller (Bottleneck) |
