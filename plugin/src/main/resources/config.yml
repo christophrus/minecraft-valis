@@ -1,0 +1,11 @@
+# Valis plugin default configuration
+websocket:
+  port: 9876
+  host: "0.0.0.0"
+
+agent:
+  perception-radius: 16
+  perception-interval-ticks: 20
+
+world:
+  name: "valis_world"

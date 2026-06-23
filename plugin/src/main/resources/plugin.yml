@@ -1,0 +1,7 @@
+name: valis-core
+version: "${version}"
+main: com.valis.ValisPlugin
+api-version: "1.21"
+depend: [Citizens, ProtocolLib]
+description: AI agent civilization simulation in Minecraft
+author: Project Valis

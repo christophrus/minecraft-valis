@@ -1,0 +1,300 @@
+"""
+ValisAgent — the complete AI agent class.
+
+Each ValisAgent combines:
+- Memory Stream with retrieval (Generative Agents paper)
+- Perception, Planning, Reflection, Execution (Generative Agents paper)
+- Cognitive Controller, Action Awareness, Social Awareness, Goal Generation (Project Sid / PIANO)
+- LLM provider for language reasoning
+
+The agent runs a cognitive loop: perceive → retrieve → plan → reflect → execute
+"""
+
+import asyncio
+import logging
+import uuid
+from dataclasses import dataclass, field
+
+from .bridge.protocol import (
+    AgentAction,
+    AgentChat,
+    PerceptionData,
+    ActionResult,
+)
+from .llm.providers import LLMProvider, create_llm
+from .memory import MemoryStream, MemoryRetrieval
+from .cognitive import (
+    PerceptionProcessor,
+    Planner,
+    Reflection,
+    Executor,
+    CognitiveController,
+    ActionAwareness,
+    SocialAwareness,
+    GoalGenerator,
+)
+
+logger = logging.getLogger("valis.agent")
+
+
+@dataclass
+class AgentConfig:
+    """Configuration for a single agent."""
+    name: str = "Agent"
+    personality: str = "curious explorer"
+    llm_provider: str = "openai"
+    llm_model: str = "gpt-4o"
+    data_dir: str = "data"
+    tick_rate: float = 2.0  # seconds between cognitive cycles
+    traits: list[str] = field(default_factory=list)
+    initial_goals: list[str] = field(default_factory=list)
+
+
+class ValisAgent:
+    """
+    A complete AI agent inhabiting the Minecraft world.
+
+    Cognitive loop (per tick):
+    1. Wait for new perception data
+    2. Run Cognitive Controller (PIANO bottleneck)
+    3. Retrieve relevant memories
+    4. Generate/update goals
+    5. Plan next action
+    6. Reflect (if threshold exceeded)
+    7. Execute action → send to Minecraft
+    """
+
+    def __init__(self, config: AgentConfig, bridge=None):
+        self.config = config
+        self.name = config.name
+        self.personality = config.personality
+        self.bridge = bridge
+        self.tick_count = 0
+        self.agent_id = uuid.uuid4().hex[:12]
+
+        # LLM
+        self.llm: LLMProvider = create_llm(
+            provider=config.llm_provider,
+            model=config.llm_model,
+        )
+
+        # Memory
+        self.memory = MemoryStream(
+            agent_name=config.name,
+            data_dir=config.data_dir,
+            embedding_fn=self.llm.embed,
+        )
+        self.retrieval = MemoryRetrieval(self.memory)
+
+        # Cognitive modules
+        self.perception_processor = PerceptionProcessor()
+        self.planner = Planner()
+        self.reflection = Reflection()
+        self.executor = Executor()
+        self.controller = CognitiveController()
+        self.action_awareness = ActionAwareness()
+        self.social_awareness = SocialAwareness(agent_name=config.name)
+        self.goal_generator = GoalGenerator()
+
+        # Active goals (delegated to goal_generator)
+        self.goals: list[str] = config.initial_goals or [
+            "Explore the surrounding area",
+            "Gather basic resources",
+            "Find or build shelter",
+        ]
+
+        # State
+        self._pending_perception: PerceptionData | None = None
+        self._perception_event = asyncio.Event()
+        self._running = False
+
+        logger.info(f"Agent created: {self.name} ({self.personality}) [{self.agent_id}]")
+
+    # --- Public API ---
+
+    async def start(self):
+        """Start the agent's cognitive loop."""
+        self._running = True
+        self.goal_generator.initialize_default_goals()
+        logger.info(f"Agent {self.name} started cognitive loop.")
+
+    async def stop(self):
+        """Stop the agent's cognitive loop."""
+        self._running = False
+        self._perception_event.set()  # Unblock any waiting
+        logger.info(f"Agent {self.name} stopped.")
+
+    def receive_perception(self, perception: PerceptionData):
+        """Called when new perception data arrives from Minecraft."""
+        self.perception_processor.update(perception)
+        self._pending_perception = perception
+        self._perception_event.set()
+
+    def receive_action_result(self, result: ActionResult):
+        """Called when an action result comes back from Minecraft."""
+        self.action_awareness.observe(
+            action_id=result.action,
+            success=result.success,
+            details=result.details,
+        )
+
+    async def cognitive_tick(self):
+        """
+        Run one full cognitive cycle.
+        This is the agent loop: perceive → controller → retrieve → plan → reflect → execute.
+        """
+        if not self._running:
+            return
+
+        # Wait for perception data
+        try:
+            await asyncio.wait_for(self._perception_event.wait(), timeout=10.0)
+        except asyncio.TimeoutError:
+            return
+        self._perception_event.clear()
+
+        self.tick_count += 1
+        perception = self._pending_perception
+        if perception is None:
+            return
+
+        try:
+            # Step 1: Run Cognitive Controller (PIANO bottleneck)
+            decision = await self.controller.decide(self)
+
+            # Step 2: Generate goals periodically
+            if self.tick_count % 30 == 0:  # Every ~60 seconds at 2s tick rate
+                await self.goal_generator.generate_goals(
+                    self,
+                    self.perception_processor.build_context_text(),
+                    self.social_awareness.get_social_context(),
+                )
+
+            # Step 3: Plan action (first tick or when task changes)
+            if self.tick_count == 1 or self.tick_count % 10 == 0:
+                await self.planner.plan_daily(self)
+
+            # Step 4: Decide specific action
+            action_str = await self.planner.decide_action(self)
+            parsed = self.executor.parse_action(action_str)
+
+            # Step 5: Execute action via bridge
+            if parsed and self.bridge:
+                parsed.agent_name = self.name
+                # Register expectation for action awareness
+                self.action_awareness.expect(
+                    action_id=parsed.action,
+                    action=parsed.action,
+                    params=parsed.params,
+                    expected=f"Successfully performed {parsed.action}",
+                )
+
+                await self.bridge.send_action(parsed)
+
+                # If the controller suggests chatting, do that too
+                if decision.chat_hint and decision.action_hint == "socialize":
+                    chat = AgentChat(agent_name=self.name, text=decision.chat_hint)
+                    await self.bridge.send_chat(chat)
+
+            # Step 6: Accumulate importance for reflection
+            importance = decision.priority * 5  # Scale to roughly match threshold
+            self.reflection.accumulate_importance(importance)
+
+            # Step 7: Reflect if threshold exceeded
+            if self.reflection.should_reflect():
+                await self.reflection.reflect(self)
+
+            # Step 8: Store event in memory
+            context = self.perception_processor.build_context_text()
+            await self.memory.add_event(
+                content=f"[Tick {self.tick_count}] At {context[:200]}",
+                importance=importance / 10.0,
+            )
+
+        except Exception as e:
+            logger.error(f"Agent {self.name} cognitive tick error: {e}", exc_info=True)
+
+
+class AgentManager:
+    """
+    Manages all AI agents in the simulation.
+    Handles spawning, despawning, and running the cognitive loop for all agents.
+    """
+
+    def __init__(self):
+        self.agents: dict[str, ValisAgent] = {}
+        self._bridge = None
+
+    def set_bridge(self, bridge):
+        """Set the WebSocket bridge for agent communication."""
+        self._bridge = bridge
+
+    async def spawn_agent(self, name: str, personality: str = "default") -> ValisAgent:
+        """Create and start a new agent."""
+        if name in self.agents:
+            logger.warning(f"Agent {name} already exists, despawning first.")
+            await self.despawn_agent(name)
+
+        config = AgentConfig(
+            name=name,
+            personality=personality,
+            data_dir="data",
+            tick_rate=2.0,
+        )
+        agent = ValisAgent(config, bridge=self._bridge)
+        self.agents[name] = agent
+        await agent.start()
+
+        logger.info(f"Agent spawned: {name} ({personality}). Total agents: {len(self.agents)}")
+        return agent
+
+    async def despawn_agent(self, name: str):
+        """Stop and remove an agent."""
+        agent = self.agents.pop(name, None)
+        if agent:
+            await agent.stop()
+            logger.info(f"Agent despawned: {name}")
+
+    async def handle_perception(self, perception: PerceptionData):
+        """Route perception data to the correct agent."""
+        agent = self.agents.get(perception.agent_name)
+        if agent:
+            agent.receive_perception(perception)
+
+    async def handle_action_result(self, result: ActionResult):
+        """Route action result to the correct agent."""
+        agent = self.agents.get(result.agent_name)
+        if agent:
+            agent.receive_action_result(result)
+
+    async def run_tick_loop(self):
+        """
+        Main tick loop that runs cognitive cycles for all agents.
+        Uses asyncio.gather to run agents concurrently (PIANO concurrency principle).
+        """
+        logger.info("Agent tick loop started.")
+        while True:
+            if not self.agents:
+                await asyncio.sleep(1)
+                continue
+
+            # Run all agent ticks concurrently
+            tasks = [
+                agent.cognitive_tick()
+                for agent in self.agents.values()
+                if agent._running
+            ]
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+            await asyncio.sleep(0.1)  # Small delay to prevent busy-loop
+
+    def get_agent_count(self) -> int:
+        return len(self.agents)
+
+    def get_all_relationship_data(self) -> dict:
+        """Get relationship graph data for all agents (for dashboard)."""
+        return {
+            name: agent.social_awareness.get_relationship_graph_data()
+            for name, agent in self.agents.items()
+        }

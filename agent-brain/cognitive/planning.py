@@ -1,0 +1,139 @@
+"""
+Planning module — generates short-term and long-term plans for the agent.
+
+Based on the Generative Agents paper (Park et al., 2023):
+- Long-term: daily schedule generated at start of each day
+- Short-term: moment-to-moment action selection based on current context
+"""
+
+import datetime
+import logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..agent import ValisAgent
+    from ..memory.memory_stream import MemoryStream
+    from ..memory.retrieval import MemoryRetrieval
+
+logger = logging.getLogger("valis.cognitive.planning")
+
+
+class Planner:
+    """
+    Handles agent planning at two levels:
+    1. Daily schedule (long-term)
+    2. Moment-to-moment action selection (short-term)
+    """
+
+    def __init__(self):
+        self.daily_plan: list[str] = []
+        self.current_task: str = ""
+        self.last_daily_plan_time: datetime.datetime | None = None
+
+    async def plan_daily(self, agent: "ValisAgent") -> list[str]:
+        """
+        Generate a daily plan based on the agent's personality, memory, and goals.
+        Called at the start of each Minecraft day.
+        """
+        # Build prompt context
+        context = agent.perception_processor.build_context_text()
+        personality = agent.personality
+        goals = agent.goals
+        memory_context = await self._get_memory_context(agent)
+
+        prompt = f"""You are {agent.name}, a {personality} in a Minecraft world.
+
+Your traits: {personality}
+
+{context}
+
+Recent memories:
+{memory_context}
+
+Your current goals:
+{chr(10).join(f'- {g}' for g in goals)}
+
+Generate a daily plan for today as a list of 3-6 tasks you want to accomplish.
+Each task should be concrete and achievable in Minecraft.
+Format: one task per line, starting with a dash (-)."""
+
+        response = await agent.llm.chat([
+            {"role": "system", "content": "You are an AI agent in Minecraft. Output only the task list, no preamble."},
+            {"role": "user", "content": prompt},
+        ])
+
+        # Parse tasks from response
+        tasks = []
+        for line in response.strip().split("\n"):
+            line = line.strip()
+            if line.startswith("- "):
+                tasks.append(line[2:])
+            elif line.startswith("-"):
+                tasks.append(line[1:])
+
+        self.daily_plan = tasks if tasks else ["Explore the area", "Gather resources", "Find shelter"]
+        self.last_daily_plan_time = datetime.datetime.now()
+        self.current_task = self.daily_plan[0] if self.daily_plan else ""
+
+        logger.info(f"Agent {agent.name} daily plan: {self.daily_plan}")
+        return self.daily_plan
+
+    async def decide_action(
+        self,
+        agent: "ValisAgent",
+    ) -> str:
+        """
+        Decide the next immediate action based on the current context,
+        daily plan, and retrieved memories.
+        Returns an action string like: "move_to(x,y,z)", "mine_block(type,x,y,z)", etc.
+        """
+        context = agent.perception_processor.build_context_text()
+
+        # Retrieve relevant memories
+        query = f"What should I do now? Current task: {self.current_task}. {context}"
+        memories = await agent.retrieval.retrieve(query, limit=5)
+
+        memory_text = "\n".join(
+            f"- [{m.created.strftime('%H:%M')}] {m.content}"
+            for m in memories
+        )
+
+        prompt = f"""You are {agent.name} in Minecraft. You must choose ONE action to perform right now.
+
+Current situation:
+{context}
+
+Your daily plan:
+{chr(10).join(f'- {t}' for t in self.daily_plan)}
+
+Current task: {self.current_task}
+
+Relevant memories:
+{memory_text}
+
+Available actions:
+- move_to(x, y, z): Walk to coordinates
+- mine_block(x, y, z): Mine the block at given position
+- place_block(block_type, x, y, z): Place a block
+- look_at(x, y, z): Look at a position
+- chat(message): Send a chat message
+- idle: Do nothing this tick
+
+Respond with exactly ONE action in format: action_name(param1=value1, param2=value2, ...)"""
+
+        response = await agent.llm.chat([
+            {"role": "system", "content": "You control a Minecraft agent. Output ONLY the action, nothing else."},
+            {"role": "user", "content": prompt},
+        ])
+
+        return response.strip()
+
+    async def _get_memory_context(self, agent: "ValisAgent") -> str:
+        """Get a summary of recent memories for planning context."""
+        recent = agent.memory.get_recent(n=10)
+        if not recent:
+            return "No memories yet."
+        return "\n".join(
+            f"- [{m.created.strftime('%H:%M')}] ({m.node_type}) {m.content[:200]}"
+            for m in recent
+        )

@@ -1,0 +1,41 @@
+# Minecraft
+server/
+!server/plugins/
+
+# Java / Gradle
+plugin/.gradle/
+plugin/build/
+plugin/bin/
+plugin/out/
+*.class
+*.jar
+*.war
+
+# Python
+agent-brain/__pycache__/
+agent-brain/**/__pycache__/
+agent-brain/.venv/
+agent-brain/venv/
+agent-brain/.env
+agent-brain/*.pyc
+agent-brain/dist/
+agent-brain/*.egg-info/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# LLM
+agent-brain/.env.local
+agent-brain/secrets/
+
+# Data
+*.db
+*.sqlite3
+agent-brain/data/
+agent-brain/chroma_data/
