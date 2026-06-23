@@ -16,15 +16,11 @@ java {
 repositories {
     mavenCentral()
     maven("https://repo.papermc.io/repository/maven-public/")
-    maven("https://repo.citizensnpcs.co/")
     maven("https://repo.dmulloy2.net/repository/public/")
 }
 
 dependencies {
-    compileOnly("io.papermc.paper:paper-api:1.21.3-R0.1-SNAPSHOT")
-    compileOnly("net.citizensnpcs:citizens-main:2.0.35-SNAPSHOT") {
-        exclude(group = "*", module = "*")
-    }
+    compileOnly("io.papermc.paper:paper-api:1.21.1-R0.1-SNAPSHOT")
     compileOnly("com.comphenix.protocol:ProtocolLib:5.3.0")
 
     // WebSocket server for agent brain communication

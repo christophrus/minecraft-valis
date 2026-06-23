@@ -4,7 +4,6 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.valis.ValisPlugin;
 import com.valis.agent.VirtualAgent;
-import net.citizensnpcs.api.npc.NPC;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
@@ -117,8 +116,8 @@ public class WorldObserver {
         int r = Math.min(radius, 16);
 
         for (Entity entity : world.getNearbyEntities(loc, r, r, r)) {
-            if (entity.getUniqueId().equals(agent.getNpc() != null ?
-                    agent.getNpc().getUniqueId() : null)) continue;
+            if (entity.getUniqueId().equals(agent.getEntity() != null ?
+                    agent.getEntity().getUniqueId() : null)) continue;
 
             JsonObject e = new JsonObject();
             e.addProperty("type", entity.getType().name());

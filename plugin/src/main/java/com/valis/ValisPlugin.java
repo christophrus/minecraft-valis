@@ -3,7 +3,6 @@ package com.valis;
 import com.valis.agent.VirtualAgent;
 import com.valis.bridge.WebSocketBridge;
 import com.valis.config.ValisConfig;
-import net.citizensnpcs.api.CitizensAPI;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.Map;
@@ -34,11 +33,6 @@ public class ValisPlugin extends JavaPlugin {
         config = new ValisConfig(this);
 
         // Verify dependencies
-        if (getServer().getPluginManager().getPlugin("Citizens") == null) {
-            log.severe("Citizens plugin not found! Disabling...");
-            getServer().getPluginManager().disablePlugin(this);
-            return;
-        }
         if (getServer().getPluginManager().getPlugin("ProtocolLib") == null) {
             log.severe("ProtocolLib not found! Disabling...");
             getServer().getPluginManager().disablePlugin(this);
@@ -69,7 +63,12 @@ public class ValisPlugin extends JavaPlugin {
 
         // Stop WebSocket bridge
         if (wsBridge != null) {
-            wsBridge.stop();
+            try {
+                wsBridge.stop();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.warning("Interrupted while stopping WebSocket bridge");
+            }
         }
 
         log.info("Valis plugin disabled.");
