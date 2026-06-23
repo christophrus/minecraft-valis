@@ -12,27 +12,30 @@ The agent runs a cognitive loop: perceive → retrieve → plan → reflect → 
 
 import asyncio
 import logging
+import os
 import uuid
 from dataclasses import dataclass, field
 
-from .bridge.protocol import (
-    AgentAction,
-    AgentChat,
-    PerceptionData,
-    ActionResult,
-)
-from .llm.providers import LLMProvider, create_llm
-from .memory import MemoryStream, MemoryRetrieval
-from .cognitive import (
-    PerceptionProcessor,
-    Planner,
-    Reflection,
-    Executor,
-    CognitiveController,
-    ActionAwareness,
-    SocialAwareness,
-    GoalGenerator,
-)
+try:
+    from .bridge.protocol import (
+        AgentAction, AgentChat, PerceptionData, ActionResult,
+    )
+    from .llm.providers import LLMProvider, create_llm
+    from .memory import MemoryStream, MemoryRetrieval
+    from .cognitive import (
+        PerceptionProcessor, Planner, Reflection, Executor,
+        CognitiveController, ActionAwareness, SocialAwareness, GoalGenerator,
+    )
+except ImportError:
+    from bridge.protocol import (
+        AgentAction, AgentChat, PerceptionData, ActionResult,
+    )
+    from llm.providers import LLMProvider, create_llm
+    from memory import MemoryStream, MemoryRetrieval
+    from cognitive import (
+        PerceptionProcessor, Planner, Reflection, Executor,
+        CognitiveController, ActionAwareness, SocialAwareness, GoalGenerator,
+    )
 
 logger = logging.getLogger("valis.agent")
 
@@ -42,10 +45,10 @@ class AgentConfig:
     """Configuration for a single agent."""
     name: str = "Agent"
     personality: str = "curious explorer"
-    llm_provider: str = "openai"
-    llm_model: str = "gpt-4o"
-    data_dir: str = "data"
-    tick_rate: float = 2.0  # seconds between cognitive cycles
+    llm_provider: str = field(default_factory=lambda: os.environ.get("VALIS_DEFAULT_LLM", "ollama"))
+    llm_model: str = field(default_factory=lambda: os.environ.get("VALIS_DEFAULT_MODEL", "mistral"))
+    data_dir: str = field(default_factory=lambda: os.environ.get("VALIS_DATA_DIR", "data"))
+    tick_rate: float = 2.0
     traits: list[str] = field(default_factory=list)
     initial_goals: list[str] = field(default_factory=list)
 
@@ -244,6 +247,10 @@ class AgentManager:
         agent = ValisAgent(config, bridge=self._bridge)
         self.agents[name] = agent
         await agent.start()
+
+        # Send agent_spawn back to Minecraft to create the NPC
+        if self._bridge:
+            await self._bridge.send({"type": "agent_spawn", "name": name, "personality": personality, "x": 0, "y": 64, "z": 0})
 
         logger.info(f"Agent spawned: {name} ({personality}). Total agents: {len(self.agents)}")
         return agent

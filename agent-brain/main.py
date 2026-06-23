@@ -13,8 +13,10 @@ import os
 import signal
 import sys
 
-from dotenv import load_dotenv
+# Make agent-brain/ importable from any working directory
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from dotenv import load_dotenv
 load_dotenv()
 
 from bridge.client import BridgeClient

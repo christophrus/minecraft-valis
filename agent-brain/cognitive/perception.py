@@ -8,7 +8,10 @@ Based on the "Perceive" module from Generative Agents (Park et al., 2023).
 import logging
 from typing import Any
 
-from ..bridge.protocol import PerceptionData
+try:
+    from ..bridge.protocol import PerceptionData
+except ImportError:
+    from bridge.protocol import PerceptionData
 
 logger = logging.getLogger("valis.cognitive.perception")
 

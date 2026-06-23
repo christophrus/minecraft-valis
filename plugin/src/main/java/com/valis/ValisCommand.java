@@ -36,8 +36,21 @@ public class ValisCommand implements CommandExecutor {
                 }
                 String name = args[1];
                 String personality = args.length > 2 ? args[2] : "default";
-                plugin.getWsBridge().sendAgentSpawn(name, personality);
-                sender.sendMessage("§6[Valis] §aSpawn request sent for agent: " + name);
+
+                // Spawn directly
+                var world = plugin.getServer().getWorld(plugin.getValisConfig().getWorldName());
+                var loc = world.getSpawnLocation();
+                var agent = new com.valis.agent.VirtualAgent(plugin, name, personality, loc);
+                agent.spawn();
+                plugin.getAgents().put(name, agent);
+                agent.startPerceptionLoop();
+                sender.sendMessage("§6[Valis] §aAgent spawned: " + name + " at spawn");
+
+                // Also notify the brain
+                var data = new com.google.gson.JsonObject();
+                data.addProperty("name", name);
+                data.addProperty("personality", personality);
+                plugin.getWsBridge().sendToBrain("spawn_agent", name, data);
             }
             case "despawn" -> {
                 if (args.length < 2) {

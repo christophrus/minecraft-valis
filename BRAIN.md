@@ -1,7 +1,7 @@
 # Project Valis — Brain Dump
 
 > Lebendiges Wissenstagebuch. Wird bei jeder Session aktualisiert.
-> Stand: 2026-06-24 — Phase 1 abgeschlossen
+> Stand: 2026-06-24 — Phase 1 ✅, erster Agent läuft, Perception-Flow debuggt
 
 ---
 
@@ -15,7 +15,7 @@
 | NPC-System | Citizens2 (Build 4210) | A*-Pathfinding, Player-Skins, getestet |
 | Agent Brain | Python 3.11+ (asyncio) | Bestes LLM-Ökosystem |
 | Plugin-Bridge | WebSocket (java-websocket ↔ Python websockets) | Bidirektional, JSON-Protokoll |
-| LLM-Backend | OpenAI / Anthropic / Ollama | Multi-Provider, konfigurierbar |
+| LLM-Backend | Ollama (Mistral 7B) / OpenAI / Anthropic | Multi-Provider, konfigurierbar. Default: Ollama lokal |
 | Plugin-API | `paper-api:1.21.4-R0.1-SNAPSHOT` | Paper 26.x API nicht in Maven; 1.21.4 rückwärtskompatibel |
 
 ---
@@ -164,13 +164,18 @@ pip install fastapi uvicorn websockets openai anthropic chromadb numpy pydantic 
 
 ---
 
-## 8. Nächste Schritte (Phase 2)
+## 8. Phase 2 — Status
 
-- [ ] Python Agent Brain mit Ollama (lokal, kostenlos) testen
-- [ ] Ersten Agenten spawnen: `/valis spawn TestAgent explorer`
-- [ ] Perception→Plan→Execute-Loop verifizieren
-- [ ] Memory-Persistenz testen
-- [ ] Mehrere Agenten (2-5) für erste soziale Interaktionen
+| Aufgabe | Status |
+|---------|--------|
+| Ollama (lokal, Mistral) getestet | ✅ Funktioniert |
+| Ersten Agenten spawnen | ✅ `valis spawn TestAgent explorer` |
+| NPC erscheint in Minecraft | ✅ Citizens-NPC am Spawn |
+| Brain ↔ Server WebSocket | ✅ Verbindet, reconnectet |
+| Perception-Datenfluss | ⚠️ Brain empfängt Daten, Cognitive Loop wartet |
+| LLM-gesteuerte Aktion ausgeführt | ❌ Noch nicht beobachtet |
+| Memory-Persistenz | ❌ Noch nicht getestet |
+| Mehrere Agenten (2-5) | ❌ Noch nicht |
 
 ---
 
@@ -183,12 +188,58 @@ pip install fastapi uvicorn websockets openai anthropic chromadb numpy pydantic 
 | `ddf52a7` | SETUP.md mit Setup- & Testanleitung |
 | `dab7d81` | Fix: Citizens entfernt → ArmorStand (Paper 1.21.1) |
 | `f6145b6` | **Phase 1 COMPLETE**: PaperMC 26.1.2 + Citizens2 + alles aktiv |
+| `fc36d4d` | BRAIN.md + Repo-Memory für Cross-Session-Wissen |
 
 ---
 
-## 10. Offene Fragen & Ideen
+## 10. Bugs dieser Session (2026-06-24) — ALLE BEHOBEN
 
-- Kann man Citizens2 direkt aus Source bauen, um `v1_21_R5` ins JAR zu bekommen?
-- PaperMC 26.x API-Artefakt in Maven? Aktuell nutzen wir `1.21.4` als Workaround.
-- ProtocolLib 5.4.0 warnt "Version 26.1.2 not tested" — später updaten?
-- Docker-Container für reproduzierbare Server-Umgebung?
+| Bug | Ursache | Fix |
+|-----|---------|-----|
+| `ImportError: attempted relative import` | Python als Script statt Package gestartet | `sys.path.insert(0, ...)` in main.py + try/except in kognitiven Modulen |
+| `Missing credentials (OpenAI)` | `AgentConfig` hart auf `openai` | Liest jetzt `VALIS_DEFAULT_LLM`/`VALIS_DEFAULT_MODEL` aus `.env` |
+| Agent-Name leer beim Spawn | JSON `data`-Feld verschachtelt | `bridge/client.py`: liest `agent_name` + `data.personality` |
+| NPC wurde nicht gespawnt | `/valis spawn` nur an Brain, keine Antwort | Direkter Spawn in `ValisCommand.java` + Brain-Benachrichtigung |
+| Powershell `&`-Syntax | Pfad mit Leerzeichen braucht `&` davor | Immer `& "pfad\java.exe"` |
+
+---
+
+## 11. Startbefehle (REFERENZ)
+
+### Terminal 1 — Minecraft Server
+```powershell
+Get-Process -Name "java" -ErrorAction SilentlyContinue | Stop-Process -Force
+Set-Location "d:\Github\minecraft-valis\server"
+& "C:\Users\lorus\AppData\Local\Programs\Eclipse Adoptium\jdk-25.0.1.8-hotspot\bin\java.exe" -Xmx2G -jar "d:\Github\minecraft-valis\server\paper.jar" nogui
+```
+
+### Terminal 2 — Agent Brain
+```powershell
+Set-Location "d:\Github\minecraft-valis\agent-brain"
+& ".venv\Scripts\python.exe" main.py
+```
+
+### Agent spawnen (in Terminal 1 nach Brain-Connect)
+```
+valis spawn TestAgent explorer
+valis list
+valis status
+```
+
+### Plugin neu bauen
+```powershell
+$env:JAVA_HOME = "C:\Program Files\Zulu\zulu-21"
+Set-Location "d:\Github\minecraft-valis\plugin"
+.\gradlew.bat shadowJar
+Copy-Item "build\libs\valis-core-0.1.0-SNAPSHOT.jar" "..\server\plugins\" -Force
+```
+
+---
+
+## 12. Offene Fragen & Ideen
+
+- Perception-Tick: Warum produziert der Brain keine Cognitive-Tick-Logs? Timeout oder kein Perception-Event?
+- `chromadb` wurde nicht installiert — Embeddings funktionieren nicht, Memory Retrieval ohne Vektor-Suche
+- PaperMC 26.x API-Artefakt in Maven? Aktuell `1.21.4` als Workaround
+- ProtocolLib 5.4.0 warnt "Version 26.1.2 not tested"
+- Docker-Container für reproduzierbare Umgebung?

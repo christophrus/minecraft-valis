@@ -79,8 +79,9 @@ class BridgeClient:
                 await self.manager.handle_action_result(result)
 
             case "spawn_agent":
-                name = data.get("name", "")
-                personality = data.get("personality", "default")
+                name = data.get("agent_name", data.get("name", ""))
+                inner = data.get("data", {})
+                personality = inner.get("personality", data.get("personality", "default"))
                 await self.manager.spawn_agent(name, personality)
 
             case "despawn_agent":

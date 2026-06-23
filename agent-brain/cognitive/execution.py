@@ -9,7 +9,10 @@ import logging
 import re
 from typing import TYPE_CHECKING
 
-from ..bridge.protocol import AgentAction
+try:
+    from ..bridge.protocol import AgentAction
+except ImportError:
+    from bridge.protocol import AgentAction
 
 if TYPE_CHECKING:
     from ..agent import ValisAgent
