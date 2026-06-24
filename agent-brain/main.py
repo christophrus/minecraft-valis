@@ -52,11 +52,14 @@ from bridge.client import BridgeClient
 from agent import AgentManager
 
 logger = logging.getLogger("valis")
-logger.setLevel(logging.DEBUG)  # Let DEBUG through to file handler (console stays at INFO)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-)
+logger.setLevel(logging.DEBUG)  # Let DEBUG through to file handler only
+
+# Console: INFO+ only, no DEBUG noise
+_console = logging.StreamHandler()
+_console.setLevel(logging.INFO)
+_console.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s"))
+logging.getLogger().addHandler(_console)
+logging.getLogger().setLevel(logging.DEBUG)  # Root allows DEBUG to reach file handler
 # Silence noisy library debug logs
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
