@@ -193,16 +193,17 @@ class ValisAgent:
             plank_type = best_log.replace("_log", "_planks") if best_log else "oak_planks"
             craft_action = AgentAction(agent_name="", action="craft", params={"item": plank_type})
             logger.debug(f"FAST-PATH: pre-emptive CRAFT planks ({best_log}={inv.get(best_log,0)})")
-        elif total_planks >= 2 and total_sticks < 4:
-            craft_action = AgentAction(agent_name="", action="craft", params={"item": "stick"})
-            logger.debug(f"FAST-PATH: pre-emptive CRAFT sticks (planks={total_planks})")
+        # Pickaxe BEFORE sticks — reserve 3 planks for pickaxe, only craft sticks from surplus
         elif total_sticks >= 2 and total_planks >= 3 and not has_pickaxe:
-            # Determine which pickaxe to craft based on available material tier
             pickaxe_type = "wooden_pickaxe"
             if inv.get("cobblestone", 0) >= 3:
                 pickaxe_type = "stone_pickaxe"
             craft_action = AgentAction(agent_name="", action="craft", params={"item": pickaxe_type})
             logger.debug(f"FAST-PATH: pre-emptive CRAFT {pickaxe_type} (sticks={total_sticks}, planks={total_planks})")
+        elif total_planks >= 5 and total_sticks < 4:
+            # Only craft sticks if we have 5+ planks (leaving 3 for pickaxe)
+            craft_action = AgentAction(agent_name="", action="craft", params={"item": "stick"})
+            logger.debug(f"FAST-PATH: pre-emptive CRAFT sticks (planks={total_planks}, surplus={total_planks-3})")
         
         if craft_action:
             return craft_action
@@ -338,6 +339,33 @@ class ValisAgent:
 
         if hint in ("move", "explore", "mine", "place"):
             import math
+            # --- Stuck detection ---
+            # Track consecutive ticks at same position with active navigation
+            current_pos_key = f"{px},{py},{pz}"
+            if not hasattr(self, '_stuck_positions'):
+                self._stuck_positions: list[str] = []
+            self._stuck_positions.append(current_pos_key)
+            if len(self._stuck_positions) > 8:
+                self._stuck_positions = self._stuck_positions[-8:]
+            # Check if stuck: same position for last 5+ ticks with active nav target
+            if (hasattr(self, '_nav_target') and self._nav_target
+                and len(self._stuck_positions) >= 5
+                and len(set(self._stuck_positions[-5:])) == 1):
+                logger.warning(f"FAST-PATH: STUCK at ({px},{py},{pz}) for 5 ticks, resetting nav+explore")
+                self._nav_target = None
+                self._explore_heading = None
+                self._explore_steps = 0
+                self._stuck_positions = []
+                # Try a random direction away from current position
+                import random as _random
+                dx, dz = _random.choice([(1,0), (-1,0), (0,1), (0,-1)])
+                dist = _random.randint(20, 40)
+                tx, ty, tz = px + dx * dist, py + 3, pz + dz * dist  # aim a bit higher to get out of holes
+                self._nav_target = (tx, ty, tz)
+                self._nav_start = time.time()
+                logger.debug(f"FAST-PATH: anti-stuck jump to ({tx},{ty},{tz})")
+                return AgentAction(agent_name="", action="move_to",
+                                   params={"x": tx, "y": ty, "z": tz})
             # Don't interrupt ongoing navigation — idle directly (skip LLM fallback)
             if hasattr(self, '_nav_target') and self._nav_target:
                 tx, ty, tz = self._nav_target
@@ -537,15 +565,16 @@ class ValisAgent:
                         plank_type = best_log.replace("_log", "_planks") if best_log else "oak_planks"
                         logger.debug(f"FALLBACK-HEURISTIC: crafting planks ({best_log}={inv.get(best_log,0)})")
                         parsed = AgentAction(agent_name="", action="craft", params={"item": plank_type})
-                    elif total_planks >= 2 and total_sticks < 4:
-                        logger.debug(f"FALLBACK-HEURISTIC: crafting sticks (planks={total_planks})")
-                        parsed = AgentAction(agent_name="", action="craft", params={"item": "stick"})
+                    # Pickaxe BEFORE sticks — reserve 3 planks for pickaxe
                     elif total_sticks >= 2 and total_planks >= 3 and not has_pickaxe:
                         pickaxe_type = "wooden_pickaxe"
                         if inv.get("cobblestone", 0) >= 3:
                             pickaxe_type = "stone_pickaxe"
                         logger.debug(f"FALLBACK-HEURISTIC: crafting {pickaxe_type}")
                         parsed = AgentAction(agent_name="", action="craft", params={"item": pickaxe_type})
+                    elif total_planks >= 5 and total_sticks < 4:
+                        logger.debug(f"FALLBACK-HEURISTIC: crafting sticks (planks={total_planks})")
+                        parsed = AgentAction(agent_name="", action="craft", params={"item": "stick"})
                     else:
                         logger.debug(f"FALLBACK-HEURISTIC: nothing to craft, staying idle")
 
