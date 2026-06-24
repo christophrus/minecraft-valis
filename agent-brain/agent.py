@@ -200,6 +200,10 @@ class ValisAgent:
                 pickaxe_type = "stone_pickaxe"
             craft_action = AgentAction(agent_name="", action="craft", params={"item": pickaxe_type})
             logger.debug(f"FAST-PATH: pre-emptive CRAFT {pickaxe_type} (sticks={total_sticks}, planks={total_planks})")
+        # Crafting table: when we have 4+ planks and no table yet
+        elif total_planks >= 4 and inv.get("crafting_table", 0) < 1:
+            craft_action = AgentAction(agent_name="", action="craft", params={"item": "crafting_table"})
+            logger.debug(f"FAST-PATH: pre-emptive CRAFT crafting_table (planks={total_planks})")
         elif total_planks >= 5 and total_sticks < 4:
             # Only craft sticks if we have 5+ planks (leaving 3 for pickaxe)
             craft_action = AgentAction(agent_name="", action="craft", params={"item": "stick"})
@@ -440,6 +444,29 @@ class ValisAgent:
                 and len(self._stuck_positions) >= 5
                 and len(set(self._stuck_positions[-5:])) == 1):
                 logger.warning(f"FAST-PATH: STUCK at ({px},{py},{pz}) for 5 ticks, resetting nav+explore")
+                # Before jumping, try to mine our way out — dig blocks around us
+                if not hasattr(self, '_stuck_mine_attempts'):
+                    self._stuck_mine_attempts = 0
+                self._stuck_mine_attempts += 1
+                # Mine blocks at foot level (py-1) in N/E/S/W cycle + blocks at head level (py, py+1)
+                dig_dirs = [(1,0), (0,1), (-1,0), (0,-1)]
+                dig_idx = (self._stuck_mine_attempts - 1) % 4
+                dx, dz = dig_dirs[dig_idx]
+                # Try foot level first, then head level
+                for dy in (-1, 0, 1):
+                    for b in blocks:
+                        if b.get("x",0)==px+dx and b.get("y",0)==py+dy and b.get("z",0)==pz+dz:
+                            btype = b.get("type","").upper()
+                            if btype not in ("AIR","CAVE_AIR","VOID_AIR","BEDROCK","WATER","LAVA"):
+                                tkey = f"{px+dx},{py+dy},{pz+dz}"
+                                if tkey not in self._recently_mined:
+                                    logger.debug(f"FAST-PATH: STUCK-DIG mining {btype} at ({px+dx},{py+dy},{pz+dz}) to escape")
+                                    self._recently_mined[tkey] = now
+                                    return AgentAction(agent_name="", action="mine_block",
+                                                       params={"x": px+dx, "y": py+dy, "z": pz+dz})
+                # If 4 dig attempts found nothing, reset and jump
+                if self._stuck_mine_attempts >= 4:
+                    self._stuck_mine_attempts = 0
                 self._nav_target = None
                 self._explore_heading = None
                 self._explore_steps = 0
