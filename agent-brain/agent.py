@@ -144,13 +144,18 @@ class ValisAgent:
                 if hint == "mine":
                     return AgentAction(agent_name="", action="mine_block", params={"x": int(tx), "y": int(ty), "z": int(tz)})
                 else:
-                    # Use most abundant block from inventory for placing
+                    # Place above nearest solid block, preferring AIR positions
                     inv = perception.inventory
                     place_mat = "dirt"
                     if inv:
                         place_mat = max(inv, key=inv.get)
+                    # Try y+1 first, then y+2 if that position is also a solid block
+                    above_y = int(ty) + 1
+                    above_blocked = any(b.get("x",0) == int(tx) and b.get("y",0) == above_y and b.get("z",0) == int(tz) for b in blocks)
+                    if above_blocked:
+                        above_y = int(ty) + 2
                     return AgentAction(agent_name="", action="place_block",
-                                       params={"block_type": place_mat, "x": int(tx), "y": int(ty) + 1, "z": int(tz)})
+                                       params={"block_type": place_mat, "x": int(tx), "y": above_y, "z": int(tz)})
             # No solid blocks nearby — fall through to move
 
         if hint == "craft":
