@@ -1,7 +1,7 @@
 # Project Valis — Brain Dump
 
 > Lebendiges Wissenstagebuch. Wird bei jeder Session aktualisiert.
-> Stand: 2026-06-24 — Phase 1 ✅, erster Agent läuft, Perception-Flow debuggt
+> Stand: 2026-06-24 — Phasen 1-3 ✅, Agent führt vollen Day-Night-Cycle aus
 
 ---
 
@@ -118,7 +118,7 @@ Copy-Item "build\libs\valis-core-0.1.0-SNAPSHOT.jar" "..\server\plugins\" -Force
 | `WebSocketBridge.java` | Bidirektionale JSON-Kommunikation mit Python |
 | `VirtualAgent.java` | Citizens-NPC-Manager (Spawn, Despawn, Perception-Loop) |
 | `WorldObserver.java` | Welt-Beobachtung (Blöcke, Entities, Zeit, Wetter) |
-| `ActionExecutor.java` | Aktionsausführung (moveTo, mineBlock, placeBlock, chat) |
+| `ActionExecutor.java` | Aktionsausführung (moveTo, mineBlock, placeBlock, craft, attackMob, collectItems) |
 
 ---
 
@@ -128,11 +128,11 @@ Copy-Item "build\libs\valis-core-0.1.0-SNAPSHOT.jar" "..\server\plugins\" -Force
 | Datei | Zweck |
 |-------|-------|
 | `main.py` | Async-Einstiegspunkt, WebSocket-Connect, Tick-Loop |
-| `agent.py` | `ValisAgent` + `AgentManager` (Cognitive Loop) |
+| `agent.py` | `ValisAgent` + `AgentManager` (Cognitive Loop + Fast-Path `_decision_to_action()`) |
 | `llm/providers.py` | Multi-LLM: OpenAI, Anthropic, DeepSeek, Ollama |
 | `memory/memory_stream.py` | Assoziativer Memory (SQLite + Embeddings) |
 | `memory/retrieval.py` | Gewichtete Retrieval (Recency × Relevance × Importance) |
-| `cognitive/controller.py` | PIANO Cognitive Controller (Bottleneck) |
+| `cognitive/controller.py` | PIANO Cognitive Controller (Bottleneck) — v2 mit Crafting-Rezepten |
 | `cognitive/planning.py` | Tagesplan + Aktionsauswahl |
 | `cognitive/reflection.py` | Schwellenwert-Reflexion |
 | `cognitive/social_awareness.py` | Sentiment-Graph zwischen Agenten |
@@ -164,7 +164,7 @@ pip install fastapi uvicorn websockets openai anthropic chromadb numpy pydantic 
 
 ---
 
-## 8. Phase 2 — Status
+## 8. Phasen 1-3 — Status
 
 | Aufgabe | Status |
 |---------|--------|
@@ -172,10 +172,17 @@ pip install fastapi uvicorn websockets openai anthropic chromadb numpy pydantic 
 | Ersten Agenten spawnen | ✅ `valis spawn TestAgent explorer` |
 | NPC erscheint in Minecraft | ✅ Citizens-NPC am Spawn |
 | Brain ↔ Server WebSocket | ✅ Verbindet, reconnectet |
-| Perception-Datenfluss | ⚠️ Brain empfängt Daten, Cognitive Loop wartet |
-| LLM-gesteuerte Aktion ausgeführt | ❌ Noch nicht beobachtet |
-| Memory-Persistenz | ❌ Noch nicht getestet |
-| Mehrere Agenten (2-5) | ❌ Noch nicht |
+| Perception-Datenfluss | ✅ Brain empfängt und verarbeitet Perception-Ticks |
+| LLM-gesteuerte Aktion ausgeführt | ✅ Mine, Move, Craft, Place, Hunt laufen |
+| Cognitive Loop (perceive→retrieve→plan→reflect→execute) | ✅ Vollständig aktiv |
+| Memory-Persistenz | ⚠️ SQLite aktiv, ChromaDB nicht getestet |
+| Pre-emptive Crafting (Reflex Layer) | ✅ log→plank→stick→pickaxe automatisch |
+| Stuck Detection | ✅ 5-Tick-Erkennung + Anti-Stuck-Jump |
+| Forest Heading Lock | ✅ Wald wird priorisiert, Plan-Koordinaten ignoriert |
+| Shelter Building | ✅ 4-Block-Ring bei "shelter" im Plan |
+| Hunting + Item Collection | ✅ attack_mob + collect_items |
+| NAV Debug Tracking | ✅ NAV-SEND/NAV-PROGRESS/NAV-STALL |
+| Mehrere Agenten (2+) | 🔲 Nächster Schritt |
 
 ---
 
@@ -201,6 +208,14 @@ pip install fastapi uvicorn websockets openai anthropic chromadb numpy pydantic 
 | Agent-Name leer beim Spawn | JSON `data`-Feld verschachtelt | `bridge/client.py`: liest `agent_name` + `data.personality` |
 | NPC wurde nicht gespawnt | `/valis spawn` nur an Brain, keine Antwort | Direkter Spawn in `ValisCommand.java` + Brain-Benachrichtigung |
 | Powershell `&`-Syntax | Pfad mit Leerzeichen braucht `&` davor | Immer `& "pfad\java.exe"` |
+| LLM `max_tokens=1024` cut off responses | DeepSeek returned empty content at limit | Increased to `max_tokens=4096` |
+| Agent mined keine Cobblestone | Junk-Filter verwarf LLM-Intent-Targets | Priority 1 (LLM intent) überspringt Junk-Filter |
+| Agent mined nachts keinen Dreck | Junk-Filter aktiv bei Nacht | Night-Check (`is_day=False`) + Plan-Targets überspringen Filter |
+| Agent craftete nie | Controller LLM sagte nie "craft" | Pre-emptive Craft-Check im Fast-Path (Reflex Layer) |
+| Craft-Chain: alle Planks→Sticks, keine für Pickaxe | Sticks vor Pickaxe gecraftet | Pickaxe-Check VOR Sticks, Planks≥5 für Sticks (3 reserviert) |
+| Agent lief nicht in den Wald | Plan-Koordinaten zogen Agent vom Waldrand weg | Forest Heading Lock, Leaves als Wood-Indikator, Plan-Coords-Skip |
+| Agent hing an entfernten Mine-Targets | Dichter Wald blockierte Pathfinder | Far-Target-Retry: nach 3× selber Target → nächster Wood-Block |
+| NAV-SEND Debug nie geloggt | `px/py/pz` in cognitive_tick() nicht definiert | `perception.position` direkt verwenden |
 
 ---
 
@@ -238,8 +253,42 @@ Copy-Item "build\libs\valis-core-0.1.0-SNAPSHOT.jar" "..\server\plugins\" -Force
 
 ## 12. Offene Fragen & Ideen
 
-- Perception-Tick: Warum produziert der Brain keine Cognitive-Tick-Logs? Timeout oder kein Perception-Event?
 - `chromadb` wurde nicht installiert — Embeddings funktionieren nicht, Memory Retrieval ohne Vektor-Suche
 - PaperMC 26.x API-Artefakt in Maven? Aktuell `1.21.4` als Workaround
 - ProtocolLib 5.4.0 warnt "Version 26.1.2 not tested"
 - Docker-Container für reproduzierbare Umgebung?
+- Citizens Pathfinder: Warum scheitert Navigation im dichten Wald? Mehr Hop-Points?
+- Nahrung/Hunger-System: Agent braucht Food-Mechanik (aktuell kein Schaden)
+
+---
+
+## 13. Session 2026-06-24 — Cognitive Loop Debugging & Skill Execution
+
+### Übersicht
+Ziel: Agenten-Fast-Path (`_decision_to_action()`) zum Laufen bringen — Mine, Craft, Move, Explore, Hunt.
+
+### Key Learnings
+1. **LLM-Controller allein reicht nicht.** Der LLM trifft High-Level-Entscheidungen ("geh zum Wald"), aber Low-Level-Crafting und Navigation brauchen deterministischen Fast-Path.
+2. **Reflex-Layer ist legitim.** `log→plank→stick→pickaxe` als deterministische Chain ist kein "Hardcoding" sondern ein Reflex — wie Atmen. LLM entscheidet Strategie ("baue Ofen"), Reflex führt Basics aus.
+3. **Junk-Filter braucht Overrides.** "Mine keinen Dreck wenn du Holz brauchst" macht tagsüber Sinn, aber nicht nachts bei Gewitter. Context-aware Filter sind nötig.
+4. **Pathfinder ist unzuverlässig.** Citizens-Navigation scheitert oft (dichter Wald, Höhlen, Wasser). Stuck Detection und Far-Target-Retry sind essenziell.
+5. **Perception-Y-Range ist kritisch.** `dy=-1..+4` war zu kurz für Baumstämme. `dy=-1..+8` + Leaves-Detection hat Wood-Findung dramatisch verbessert.
+
+### Architektur-Prinzip
+```
+Controller LLM (Strategie) → Fast-Path (Reflexe) → Action
+    ↓ (wenn Fast-Path None)
+Planner LLM (Fallback) → Heuristic Crafting → Action
+```
+
+### Wichtigste Commits
+| Commit | Inhalt |
+|--------|--------|
+| `012a03c` | Junk-Filter: LLM-Intent-Targets respektieren, Distance-Check |
+| `eea245b` | Junk-Filter: Nacht-Override + Plan-Target-Override |
+| `da00d0a` | Pre-emptive Crafting (Reflex Layer) |
+| `8fcef0c` | Controller Prompt v2 (Crafting-Rezepte) |
+| `8dae13a` | Craft-Order-Fix (Pickaxe vor Sticks) + Stuck Detection |
+| `c65be47` | Tree Detection, Shelter, Hunting, Crafting Table |
+| `cd8dd6b` | Leaves als Wood-Indikator, Forest Lock, Plan-Coord-Skip |
+| `14b3056` | NAV Debug fix + Far-Target Retry Loop |

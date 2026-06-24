@@ -105,49 +105,69 @@ minecraft-valis/
 
 ## Phased Implementation Plan
 
-### Phase 1: Foundation
-1. Set up PaperMC server (JDK 21, world config)
-2. Create plugin skeleton (valis-core) with Citizens2 + ProtocolLib
-3. Create Python agent brain service (FastAPI + asyncio)
-4. Establish WebSocket bridge between plugin and agent brain
-5. Spawn first AI-controlled NPC agent in the world
+### Phase 1: Foundation ✅
+1. ✅ Set up PaperMC server (JDK 21, world config)
+2. ✅ Create plugin skeleton (valis-core) with Citizens2 + ProtocolLib
+3. ✅ Create Python agent brain service (FastAPI + asyncio)
+4. ✅ Establish WebSocket bridge between plugin and agent brain
+5. ✅ Spawn first AI-controlled NPC agent in the world
 
-### Phase 2: Core Agent Architecture (Generative Agents)
-6. Perception module — capture world state around each agent
-7. Memory Stream — associative memory with embeddings (SQLite + ChromaDB)
-8. Retrieval — weighted by recency, relevance, importance
-9. Planning — daily schedules + moment-to-moment action selection
-10. Reflection — synthesize memories into higher-level insights
-11. Skill Execution — translate plans to Minecraft mechanics
-12. Agent loop — perceive → retrieve → plan → reflect → execute
+### Phase 2: Core Agent Architecture (Generative Agents) ✅
+6. ✅ Perception module — capture world state around each agent
+7. ✅ Memory Stream — associative memory with embeddings (SQLite + ChromaDB)
+8. ✅ Retrieval — weighted by recency, relevance, importance
+9. ✅ Planning — daily schedules + moment-to-moment action selection
+10. ✅ Reflection — synthesize memories into higher-level insights
+11. ✅ Skill Execution — translate plans to Minecraft mechanics
+    - move_to, mine_block, place_block, craft (auto-chain: log→plank→stick→pickaxe)
+    - attack_mob, collect_items
+12. ✅ Agent loop — perceive → retrieve → plan → reflect → execute
 
-### Phase 3: PIANO Enhancements (Project Sid)
-13. Concurrent module execution (asyncio)
-14. Cognitive Controller — bottlenecked decision-making for coherence
-15. Action Awareness — compare expected vs actual outcomes
-16. Social Awareness — directed sentiment graph between agents
-17. Goal Generation — create objectives from experiences
+### Phase 3: PIANO Enhancements (Project Sid) ✅
+13. ✅ Concurrent module execution (asyncio)
+14. ✅ Cognitive Controller — bottlenecked decision-making for coherence
+15. ✅ Action Awareness — compare expected vs actual outcomes
+16. ✅ Social Awareness — directed sentiment graph between agents
+17. ✅ Goal Generation — create objectives from experiences
 
 ### Phase 4: Multi-Agent Civilization
-18. Personality & Trait system
-19. Multi-agent orchestration (20-100 agents)
-20. Role specialization emergence
-21. Collective rule system (constitution, voting, taxation)
-22. Cultural transmission (memes + religion)
+18. 🔲 Personality & Trait system
+19. 🔲 Multi-agent orchestration (2-100 agents)
+20. 🔲 Role specialization emergence
+21. 🔲 Collective rule system (constitution, voting, taxation)
+22. 🔲 Cultural transmission (memes + religion)
 
 ### Phase 5: Observability & Polish
-23. Web dashboard
-24. Configuration system (YAML/JSON)
-25. Logging & replay
-26. Performance optimization
+23. 🔲 Web dashboard
+24. 🔲 Configuration system (YAML/JSON)
+25. 🟡 Logging & debug (comprehensive debug logs active, NAV tracking, stuck detection)
+26. 🔲 Performance optimization
 
 ## Verification Criteria
 
-- **Phase 1**: Server starts, plugin loads, WebSocket connects, single NPC spawns
-- **Phase 2**: Agent performs full day-night cycle, executes Minecraft actions
-- **Phase 3**: Agent maintains coherence, learns from outcomes, tracks social sentiments
-- **Phase 4**: 20+ agents coexist, specialize, participate in governance, propagate culture
-- **Phase 5**: Dashboard shows live state, config changes are hot-reloadable, replay works
+- **Phase 1**: ✅ Server starts, plugin loads, WebSocket connects, single NPC spawns
+- **Phase 2**: ✅ Agent performs full day-night cycle, executes Minecraft actions
+- **Phase 3**: ✅ Agent maintains coherence, learns from outcomes, tracks social sentiments
+- **Phase 4**: 🔲 2+ agents coexist, specialize, participate in governance, propagate culture
+- **Phase 5**: 🟡 Debug logging active, dashboard/config pending
+
+## Beyond Plan — Additional Features Built
+
+During Phase 2/3 implementation, several unplanned but necessary features were added:
+
+| Feature | Purpose |
+|---------|---------|
+| **Pre-emptive Crafting (Reflex Layer)** | Auto-crafts log→plank→stick→pickaxe without LLM involvement |
+| **Junk Filter + Overrides** | Prevents mining dirt when wood needed, but allows at night/from plan |
+| **Stuck Detection + Anti-Stuck Jump** | Detects 5+ ticks at same position, resets nav with random jump |
+| **Forest Heading Lock** | When forest biome nearby, locks explore heading for 20-30 steps |
+| **Leaves as Wood Indicator** | Counts *_LEAVES in `wood_in_perception`, navigates toward leaves |
+| **Far-Target Retry Loop** | After 3 attempts to reach same far block, falls back to nearest wood |
+| **Shelter Building (4-block ring)** | N/E/S/W block placement when plan mentions "shelter" |
+| **Crafting Table Auto-Place** | Places crafting_table at feet+1 when in inventory |
+| **Hunting (attack_mob + collect_items)** | Attacks nearest animal, collects dropped items |
+| **NAV Debug Tracking** | NAV-SEND/NAV-PROGRESS/NAV-STALL logs for pathfinder diagnostics |
+| **Controller Prompt v2** | Crafting recipes, hunt hint, clear decision rules in LLM prompt |
 
 ## Excluded Scope (Future)
 
