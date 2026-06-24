@@ -136,7 +136,14 @@ class ValisAgent:
         blocks = perception.nearby_blocks
 
         if hint in ("mine", "place"):
-            import random, re
+            import random, re, time
+            # Track recently mined positions to avoid re-mining AIR
+            if not hasattr(self, '_recently_mined'):
+                self._recently_mined: dict[str, float] = {}
+            now = time.time()
+            # Clean expired entries (older than 5 seconds)
+            self._recently_mined = {k: v for k, v in self._recently_mined.items() if now - v < 5}
+            
             # Priority mine targets: wood/log blocks first, then plan coordinates, then nearest
             wood_blocks = [b for b in blocks if b.get("type", "").upper() in 
                           ("OAK_LOG", "BIRCH_LOG", "SPRUCE_LOG", "JUNGLE_LOG", "ACACIA_LOG", 
@@ -152,18 +159,26 @@ class ValisAgent:
                         if b.get("x",0) == int(pc[0]) and b.get("y",0) == int(pc[1]) and b.get("z",0) == int(pc[2])])
             
             target = None
+            # Filter out recently mined positions
+            def pos_key(b): return f"{b.get('x',0)},{b.get('y',0)},{b.get('z',0)}"
+            wood_blocks = [b for b in wood_blocks if pos_key(b) not in self._recently_mined]
             if wood_blocks:
+                target = min(wood_blocks, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
+            elif plan_targets:
                 target = min(wood_blocks, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
             elif plan_targets:
                 target = random.choice(plan_targets)
             else:
                 solid_blocks = [b for b in blocks if b.get("type", "AIR") not in ("AIR", "CAVE_AIR", "VOID_AIR", "WATER", "LAVA")]
+                solid_blocks = [b for b in solid_blocks if pos_key(b) not in self._recently_mined]
                 if solid_blocks:
                     target = min(solid_blocks, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
             
             if target:
                 tx, ty, tz = target.get("x", px), target.get("y", py - 1), target.get("z", pz)
                 if hint == "mine":
+                    # Track position to avoid re-mining AIR on next tick
+                    self._recently_mined[f"{int(tx)},{int(ty)},{int(tz)}"] = now
                     return AgentAction(agent_name="", action="mine_block", params={"x": int(tx), "y": int(ty), "z": int(tz)})
                 else:
                     inv = perception.inventory
