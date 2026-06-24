@@ -174,7 +174,6 @@ class ValisAgent:
             
             if target:
                 target_type = target.get("type", "").upper()
-                self._nav_target = None  # Not navigating, doing mine/place
                 tx, ty, tz = target.get("x", px), target.get("y", py - 1), target.get("z", pz)
                 
                 # If hint is "mine" but target is just dirt/grass/stone, and we need wood, 
@@ -215,27 +214,12 @@ class ValisAgent:
             return None
 
         if hint in ("move", "explore", "mine", "place"):
-            # Don't cancel ongoing navigation unless close to destination
             import random, re, math
-            if hasattr(self, '_nav_target') and self._nav_target:
-                tx, ty, tz = self._nav_target
-                dist = math.sqrt((px - tx)**2 + (py - ty)**2 + (pz - tz)**2)
-                # Track idle streak to detect stuck navigation
-                if not hasattr(self, '_nav_idle_count'):
-                    self._nav_idle_count = 0
-                if dist > 5 and self._nav_idle_count < 4:
-                    self._nav_idle_count += 1
-                    return AgentAction(agent_name="", action="idle")
-                # Arrived or timed out — clear nav state
-                self._nav_target = None
-                self._nav_idle_count = 0
-            
             # Try to move towards a target from the daily plan
             plan_text = " ".join(self.planner.daily_plan)
             coords = re.findall(r'\((-?\d+),\s*(-?\d+),\s*(-?\d+)\)', plan_text)
             if coords and random.random() < 0.7:
                 tx, ty, tz = map(int, random.choice(coords))
-                self._nav_target = (tx, ty, tz)
                 return AgentAction(agent_name="", action="move_to",
                                    params={"x": tx, "y": ty, "z": tz})
             # Systematic exploration: bias toward forests if agent has no wood
@@ -264,13 +248,10 @@ class ValisAgent:
                 self._explore_steps = 0
             dx, dz = self._explore_heading
             dist = random.randint(15, 30)
-            tx, ty, tz = px + dx * dist, py, pz + dz * dist
-            self._nav_target = (tx, ty, tz)
             return AgentAction(agent_name="", action="move_to",
-                               params={"x": tx, "y": ty, "z": tz})
+                               params={"x": px + dx * dist, "y": py, "z": pz + dz * dist})
 
         if hint in ("rest", "idle"):
-            self._nav_target = None
             return AgentAction(agent_name="", action="idle")
 
         # Complex actions: fall back to LLM

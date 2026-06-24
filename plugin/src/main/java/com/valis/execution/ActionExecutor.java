@@ -8,6 +8,7 @@ import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
+import org.bukkit.event.player.PlayerTeleportEvent;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -59,7 +60,7 @@ public class ActionExecutor {
     }
 
     /**
-     * Navigate the NPC to a target position using Citizens pathfinding.
+     * Teleport the NPC to a target position.
      */
     private void moveTo(JsonObject params) {
         int x = (int) params.get("x").getAsDouble();
@@ -69,9 +70,20 @@ public class ActionExecutor {
         NPC npc = agent.getNpc();
         if (npc != null && npc.isSpawned()) {
             Location target = new Location(npc.getStoredLocation().getWorld(), x + 0.5, y, z + 0.5);
-            npc.getNavigator().setTarget(target);
+            // Find safe ground (non-air, non-water, non-lava)
+            World world = target.getWorld();
+            Block ground = world.getBlockAt(x, y, z);
+            // If target is water/lava/air, scan down for solid ground
+            for (int dy = 0; dy < 10; dy++) {
+                Block check = world.getBlockAt(x, y - dy, z);
+                if (check.getType().isSolid() && check.getType() != Material.WATER && check.getType() != Material.LAVA) {
+                    target.setY(check.getY() + 1);
+                    break;
+                }
+            }
+            npc.teleport(target, PlayerTeleportEvent.TeleportCause.PLUGIN);
             plugin.getWsBridge().sendActionResult(agent.getAgentName(), "move_to",
-                    true, "navigating to " + x + "," + y + "," + z);
+                    true, "teleported to " + x + "," + target.getBlockY() + "," + z);
         }
     }
 
