@@ -1,8 +1,14 @@
 package com.valis;
 
+import org.bukkit.Bukkit;
+import org.bukkit.Material;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
+import org.bukkit.entity.Player;
+import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -11,6 +17,7 @@ import org.jetbrains.annotations.NotNull;
  * /valis despawn <name> - Remove an AI agent
  * /valis spectate <name> - Spectate an AI agent (follow camera)
  * /valis tp <name> - Teleport to an AI agent
+ * /valis inv <name> - View agent inventory
  * /valis list - List all active agents
  * /valis status - Show simulation status
  */
@@ -26,7 +33,7 @@ public class ValisCommand implements CommandExecutor {
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command cmd,
                              @NotNull String label, String[] args) {
         if (args.length == 0) {
-            sender.sendMessage("§6[Valis] §eUsage: /valis <spawn|despawn|tp|spectate|list|status>");
+            sender.sendMessage("§6[Valis] §eUsage: /valis <spawn|despawn|tp|spectate|inv|list|status>");
             return true;
         }
 
@@ -133,6 +140,37 @@ public class ValisCommand implements CommandExecutor {
                 player.setGameMode(org.bukkit.GameMode.SURVIVAL);
                 plugin.stopSpectating(player);
                 sender.sendMessage("§6[Valis] §aTeleported to " + name);
+            }
+            case "inv" -> {
+                if (args.length < 2) {
+                    sender.sendMessage("§6[Valis] §eUsage: /valis inv <name>");
+                    return true;
+                }
+                if (!(sender instanceof Player player)) {
+                    sender.sendMessage("§6[Valis] §cOnly players can use this command.");
+                    return true;
+                }
+                String name = args[1];
+                var agent = plugin.getAgents().get(name);
+                if (agent == null) {
+                    sender.sendMessage("§6[Valis] §7Agent not found: " + name);
+                    return true;
+                }
+                var inv = agent.getInventory();
+                int size = ((Math.max(inv.size(), 9) + 8) / 9) * 9;  // round up to multiple of 9
+                if (size > 54) size = 54;
+                if (size < 9) size = 9;
+                Inventory gui = Bukkit.createInventory(null, size, "§b" + name + "'s Inventory");
+                int slot = 0;
+                for (var entry : inv.entrySet()) {
+                    Material mat = Material.matchMaterial(entry.getKey().toUpperCase());
+                    if (mat == null || mat == Material.AIR) continue;
+                    int count = Math.min(entry.getValue(), mat.getMaxStackSize());
+                    ItemStack item = new ItemStack(mat, count);
+                    gui.setItem(slot++, item);
+                }
+                player.openInventory(gui);
+                sender.sendMessage("§6[Valis] §aViewing " + name + "'s inventory.");
             }
             case "status" -> {
                 sender.sendMessage("§6[Valis] §eStatus:");

@@ -9,6 +9,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.player.AsyncPlayerChatEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -67,6 +68,14 @@ public class ValisPlugin extends JavaPlugin {
             public void onChat(AsyncPlayerChatEvent event) {
                 if (wsBridge != null && wsBridge.isRunning()) {
                     wsBridge.sendPlayerChat(event.getPlayer().getName(), event.getMessage());
+                }
+            }
+            @EventHandler
+            public void onInvClick(InventoryClickEvent event) {
+                // Prevent stealing from agent inventory view
+                var title = event.getView().getTitle();
+                if (title.contains("'s Inventory")) {
+                    event.setCancelled(true);
                 }
             }
         }, this);
