@@ -117,12 +117,14 @@ move  = Walk to coordinates or toward a biome/structure. Include coords if known
 
 explore = Systematic exploration when you don't know what's around. Move further than 'move'.
 
+hunt = Attack nearby animals (sheep, cow, pig, chicken, rabbit) for food. Use when hungry or need wool/leather.
+
 socialize = Talk to nearby players/villagers.
 
 rest/idle = Do nothing (only when waiting or nothing useful to do).
 
 Output ONLY valid JSON:
-{{"intent": "what and where", "reason": "why", "priority": 0-10, "action_hint": "one of the above", "chat_hint": "or empty"}}"""
+{{"intent": "what and where", "reason": "why", "priority": 0-10, "action_hint": "mine|craft|place|move|explore|hunt|socialize|rest", "chat_hint": "or empty"}}"""
 
         import json, re
         for attempt in range(2):

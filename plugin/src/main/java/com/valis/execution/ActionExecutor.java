@@ -37,6 +37,8 @@ public class ActionExecutor {
     public void execute(String action, JsonObject params) {
         try {
             switch (action.toLowerCase()) {
+                case "attack_mob" -> attackMob(params);
+                case "collect_items" -> collectItems();
                 case "move_to" -> moveTo(params);
                 case "mine_block" -> mineBlock(params);
                 case "place_block" -> placeBlock(params);
@@ -55,6 +57,53 @@ public class ActionExecutor {
             plugin.getWsBridge().sendActionResult(agent.getAgentName(), action,
                     false, e.getMessage());
         }
+    }
+
+    /**
+     * Attack the nearest entity of a specified type (or any mob if not specified).
+     */
+    private void attackMob(JsonObject params) {
+        String targetType = params.has("type") ? params.get("type").getAsString().toUpperCase() : null;
+        World world = agent.getLocation().getWorld();
+        if (world == null) return;
+        Location loc = agent.getLocation();
+        double bestDist = Double.MAX_VALUE;
+        org.bukkit.entity.Entity bestTarget = null;
+        for (org.bukkit.entity.Entity entity : world.getNearbyEntities(loc, 5, 5, 5)) {
+            if (entity.getUniqueId().equals(agent.getNpc() != null ? agent.getNpc().getUniqueId() : null)) continue;
+            if (entity instanceof org.bukkit.entity.Player) continue; // Don't attack players
+            if (!(entity instanceof org.bukkit.entity.LivingEntity)) continue;
+            if (targetType != null && !entity.getType().name().equalsIgnoreCase(targetType)) continue;
+            double dist = loc.distance(entity.getLocation());
+            if (dist < bestDist) { bestDist = dist; bestTarget = entity; }
+        }
+        if (bestTarget instanceof org.bukkit.entity.LivingEntity living) {
+            living.damage(4.0); // ~2 hearts per hit
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "attack_mob",
+                    true, "attacked " + bestTarget.getType().name() + " (" + String.format("%.1f", bestDist) + "m)");
+        } else {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "attack_mob",
+                    false, "no target found");
+        }
+    }
+
+    /**
+     * Collect nearby dropped items on the ground.
+     */
+    private void collectItems() {
+        World world = agent.getLocation().getWorld();
+        if (world == null) return;
+        Location loc = agent.getLocation();
+        int collected = 0;
+        for (org.bukkit.entity.Entity entity : world.getNearbyEntities(loc, 3, 3, 3)) {
+            if (entity instanceof org.bukkit.entity.Item item) {
+                agent.addToInventory(item.getItemStack().getType(), item.getItemStack().getAmount());
+                item.remove();
+                collected++;
+            }
+        }
+        plugin.getWsBridge().sendActionResult(agent.getAgentName(), "collect_items",
+                true, "collected " + collected + " items");
     }
 
     /**

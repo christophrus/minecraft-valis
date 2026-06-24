@@ -208,6 +208,23 @@ class ValisAgent:
         if craft_action:
             return craft_action
 
+        # --- CRAFTING TABLE: place if we have one but none nearby ---
+        has_crafting_table_inv = inv.get("crafting_table", 0) >= 1
+        has_crafting_table_nearby = any(
+            b.get("type", "").upper() == "CRAFTING_TABLE" and abs(b.get("x",0)-px) <= 3 and abs(b.get("z",0)-pz) <= 3
+            for b in blocks
+        )
+        if has_crafting_table_inv and not has_crafting_table_nearby:
+            # Place crafting table at agent's feet+1
+            tx, ty, tz = px, py + 1, pz
+            # Check if position is air
+            blocked = any(b.get("x",0)==tx and b.get("y",0)==ty and b.get("z",0)==tz
+                          and b.get("type","").upper() not in ("AIR","CAVE_AIR","VOID_AIR") for b in blocks)
+            if not blocked:
+                logger.debug(f"FAST-PATH: placing crafting_table at ({tx},{ty},{tz})")
+                return AgentAction(agent_name="", action="place_block",
+                                   params={"block_type": "crafting_table", "x": tx, "y": ty, "z": tz})
+
         if hint in ("mine", "place"):
             target = None
             target_priority = 0  # 1=intent, 2=wood, 3=plan, 4=solid
@@ -332,6 +349,66 @@ class ValisAgent:
                                            params={"block_type": place_mat, "x": int(tx), "y": above_y, "z": int(tz)})
             # No target found, fall through to move
             logger.debug(f"FAST-PATH: no target in mine/place, falling to explore")
+
+        # --- SHELTER BUILDING: multi-block placement for basic shelter ---
+        plan_text = " ".join(self.planner.daily_plan).lower()
+        want_shelter = any(w in plan_text for w in ("shelter", "house", "hut", "build a"))
+        if hint == "place" and want_shelter and not target:
+            # Simple 4-block ring pattern at agent's feet+1 (N/E/S/W)
+            shelter_offsets = [(0, 1, -1), (1, 1, 0), (0, 1, 1), (-1, 1, 0)]
+            if not hasattr(self, '_shelter_step'):
+                self._shelter_step = 0
+            if not hasattr(self, '_shelter_origin'):
+                self._shelter_origin = (px, py, pz)
+            # If agent moved far, reset shelter
+            sox, soy, soz = self._shelter_origin
+            if abs(px - sox) > 3 or abs(pz - soz) > 3:
+                self._shelter_step = 0
+                self._shelter_origin = (px, py, pz)
+            # Get material to build with
+            build_mat = "dirt"
+            if inv.get("cobblestone", 0) >= 4:
+                build_mat = "cobblestone"
+            elif inv.get("oak_planks", 0) >= 4:
+                build_mat = "oak_planks"
+            inv_build = inv.get(build_mat, 0)
+            if inv_build >= 1 and self._shelter_step < 4:
+                dx, dy, dz = shelter_offsets[self._shelter_step]
+                tx, ty, tz = px + dx, py + dy, pz + dz
+                # Check not blocked
+                blocked = any(b.get("x",0)==tx and b.get("y",0)==ty and b.get("z",0)==tz
+                              and b.get("type","").upper() not in ("AIR","CAVE_AIR","VOID_AIR") for b in blocks)
+                if not blocked:
+                    pkey = f"{tx},{ty},{tz}"
+                    self._recently_placed[pkey] = now
+                    self._shelter_step += 1
+                    logger.debug(f"FAST-PATH: SHELTER step {self._shelter_step}/4 placing {build_mat} at ({tx},{ty},{tz})")
+                    return AgentAction(agent_name="", action="place_block",
+                                       params={"block_type": build_mat, "x": tx, "y": ty, "z": tz})
+                else:
+                    self._shelter_step += 1  # Skip blocked position
+            elif self._shelter_step >= 4:
+                logger.debug(f"FAST-PATH: SHELTER complete (4 blocks placed)")
+                self._shelter_step = 0  # Reset for next build
+
+        # --- HUNT: attack nearby animals for food ---
+        if hint in ("hunt", "attack") or ("hunt" in intent.lower() or any(
+            w in intent.lower() for w in ("sheep", "cow", "pig", "chicken", "rabbit", "food", "meat", "hunt"))):
+            entities = perception.nearby_entities
+            # Find nearest huntable animal
+            huntable = [e for e in entities if e.get("type","") in 
+                       ("SHEEP","COW","PIG","CHICKEN","RABBIT")]
+            if huntable:
+                target = min(huntable, key=lambda e: e.get("distance", 999))
+                logger.debug(f"FAST-PATH: HUNT -> {target.get('type')} at {target.get('distance',0):.1f}m")
+                return AgentAction(agent_name="", action="attack_mob",
+                                   params={"type": target.get("type","").lower()})
+            else:
+                logger.debug(f"FAST-PATH: HUNT -> no animals nearby")
+        # Collect dropped items after hunting
+        if hint == "collect" or "collect" in intent.lower():
+            logger.debug(f"FAST-PATH: collecting nearby items")
+            return AgentAction(agent_name="", action="collect_items")
 
         if hint == "craft":
             logger.debug(f"FAST-PATH: craft hint -> returning None for LLM fallback")

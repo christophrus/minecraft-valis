@@ -100,8 +100,8 @@ public class WorldObserver {
         for (int dx = -r; dx <= r; dx += 1) {
             for (int dz = -r; dz <= r; dz += 1) {
                 if (dx == 0 && dz == 0) continue;
-                // Sample from feet (-1) up to +4 to capture tree trunks
-                for (int dy = -1; dy <= 4; dy++) {
+                // Sample from feet (-1) up to +8 to capture full tree trunks
+                for (int dy = -1; dy <= 8; dy++) {
                     Block block = world.getBlockAt(bx + dx, by + dy, bz + dz);
                     Material mat = block.getType();
                     if (mat != Material.AIR && mat != Material.CAVE_AIR && mat != Material.VOID_AIR) {
