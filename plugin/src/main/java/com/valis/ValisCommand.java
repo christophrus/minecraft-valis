@@ -110,7 +110,8 @@ public class ValisCommand implements CommandExecutor {
                 }
                 player.setGameMode(org.bukkit.GameMode.SPECTATOR);
                 player.setSpectatorTarget(entity);
-                sender.sendMessage("§6[Valis] §aNow spectating " + name + ". Use /valis tp <name> to stop.");
+                plugin.startSpectating(player, name);
+                sender.sendMessage("§6[Valis] §aNow spectating " + name + ". Inventory shown in action bar. Use /valis tp <name> to stop.");
             }
             case "tp" -> {
                 if (args.length < 2) {
@@ -129,6 +130,8 @@ public class ValisCommand implements CommandExecutor {
                     return true;
                 }
                 player.teleport(agent.getLocation());
+                player.setGameMode(org.bukkit.GameMode.SURVIVAL);
+                plugin.stopSpectating(player);
                 sender.sendMessage("§6[Valis] §aTeleported to " + name);
             }
             case "status" -> {

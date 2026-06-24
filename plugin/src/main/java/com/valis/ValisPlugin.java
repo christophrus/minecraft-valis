@@ -3,6 +3,10 @@ package com.valis;
 import com.valis.agent.VirtualAgent;
 import com.valis.bridge.WebSocketBridge;
 import com.valis.config.ValisConfig;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.TextColor;
+import org.bukkit.Bukkit;
+import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.AsyncPlayerChatEvent;
@@ -24,6 +28,7 @@ public class ValisPlugin extends JavaPlugin {
     private ValisConfig config;
     private WebSocketBridge wsBridge;
     private final Map<String, VirtualAgent> agents = new ConcurrentHashMap<>();
+    private final Map<Player, String> spectatingPlayers = new ConcurrentHashMap<>();  // player -> agent name
 
     @Override
     public void onEnable() {
@@ -78,6 +83,31 @@ public class ValisPlugin extends JavaPlugin {
                 log.info("Restored agent from NPC: " + agent.getAgentName());
             }
         }
+
+        // Show agent inventory to spectating players every 2 seconds
+        getServer().getScheduler().runTaskTimer(this, () -> {
+            for (var entry : spectatingPlayers.entrySet()) {
+                Player player = entry.getKey();
+                VirtualAgent agent = agents.get(entry.getValue());
+                if (agent == null || !player.isOnline()) {
+                    spectatingPlayers.remove(player);
+                    continue;
+                }
+                var inv = agent.getInventory();
+                String text;
+                if (inv.isEmpty()) {
+                    text = "§7[§b" + agent.getAgentName() + "§7] §fInventory: §7empty";
+                } else {
+                    StringBuilder sb = new StringBuilder();
+                    for (var item : inv.entrySet()) {
+                        if (sb.length() > 0) sb.append(" §7|§f ");
+                        sb.append(item.getKey()).append(":§e").append(item.getValue());
+                    }
+                    text = "§7[§b" + agent.getAgentName() + "§7] §f" + sb.toString();
+                }
+                player.sendActionBar(Component.text(text));
+            }
+        }, 20L, 40L);  // every 2 seconds
     }
 
     @Override
@@ -107,4 +137,13 @@ public class ValisPlugin extends JavaPlugin {
     public Map<String, VirtualAgent> getAgents() { return agents; }
     public WebSocketBridge getWsBridge() { return wsBridge; }
     public ValisConfig getValisConfig() { return config; }
+    public Map<Player, String> getSpectatingPlayers() { return spectatingPlayers; }
+
+    public void startSpectating(Player player, String agentName) {
+        spectatingPlayers.put(player, agentName);
+    }
+
+    public void stopSpectating(Player player) {
+        spectatingPlayers.remove(player);
+    }
 }
