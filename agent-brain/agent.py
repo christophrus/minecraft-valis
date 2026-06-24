@@ -214,7 +214,7 @@ class ValisAgent:
         if perception is None:
             return
 
-        logger.info(f"Agent {self.name} tick {self.tick_count}: processing perception at ({perception.position.get('x',0)},{perception.position.get('y',0)},{perception.position.get('z',0)})")
+        logger.info(f"Agent {self.name} tick {self.tick_count}: pos=({perception.position.get('x',0)},{perception.position.get('y',0)},{perception.position.get('z',0)}) inv={perception.inventory}")
 
         try:
             # Step 1: Run Cognitive Controller (PIANO bottleneck)

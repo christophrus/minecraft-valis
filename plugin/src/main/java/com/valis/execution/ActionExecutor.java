@@ -94,16 +94,17 @@ public class ActionExecutor {
         }
 
         // Simulate block breaking: drop items, set to air
+        var matName = block.getType().name();
         var drops = block.getDrops();
         block.breakNaturally();
         for (var drop : drops) {
             agent.addToInventory(drop.getType(), drop.getAmount());
         }
-        if (drops.isEmpty() && block.getType().isBlock()) {
-            agent.addToInventory(block.getType(), 1);  // at least track the block itself
+        if (drops.isEmpty()) {
+            agent.addToInventory(block.getType(), 1);
         }
         plugin.getWsBridge().sendActionResult(agent.getAgentName(), "mine_block",
-                true, "mined " + block.getType().name() + " at " + x + "," + y + "," + z);
+                true, "mined " + matName + " at " + x + "," + y + "," + z);
     }
 
     /**
