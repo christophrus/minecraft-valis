@@ -20,6 +20,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger("valis.cognitive.execution")
 
 
+def _parse_num(s: str) -> int | float:
+    """Parse a string as int or float, defaulting to 0."""
+    try:
+        return int(s) if "." not in s else float(s)
+    except ValueError:
+        return 0
+
+
 class Executor:
     """
     Parses action strings from the planner and converts them into
@@ -77,6 +85,20 @@ class Executor:
                 except ValueError:
                     pass  # Keep as string
                 params[key] = value
+
+            # Fallback: if no key=value pairs, try positional args
+            if not params:
+                parts = [p.strip().strip('"').strip("'") for p in params_str.split(",")]
+                coord_actions = {"move_to", "moveto", "go_to", "goto", "walk_to",
+                                 "mine_block", "mine", "break_block", "dig",
+                                 "look_at", "look", "face"}
+                if action_name in coord_actions and len(parts) >= 3:
+                    params = {"x": _parse_num(parts[0]), "y": _parse_num(parts[1]), "z": _parse_num(parts[2])}
+                elif action_name in ("place_block", "place", "build") and len(parts) >= 4:
+                    params = {"block_type": parts[0], "x": _parse_num(parts[1]),
+                              "y": _parse_num(parts[2]), "z": _parse_num(parts[3])}
+                elif action_name in ("chat", "say", "speak", "talk"):
+                    params = {"message": params_str}
 
         # Map action names to Minecraft actions
         action_map = {

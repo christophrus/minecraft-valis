@@ -59,9 +59,9 @@ public class ActionExecutor {
      * Navigate the NPC to a target position using Citizens pathfinding.
      */
     private void moveTo(JsonObject params) {
-        int x = params.get("x").getAsInt();
-        int y = params.get("y").getAsInt();
-        int z = params.get("z").getAsInt();
+        int x = (int) params.get("x").getAsDouble();
+        int y = (int) params.get("y").getAsDouble();
+        int z = (int) params.get("z").getAsDouble();
 
         NPC npc = agent.getNpc();
         if (npc != null && npc.isSpawned()) {
@@ -76,9 +76,9 @@ public class ActionExecutor {
      * Mine/break a block at the specified position.
      */
     private void mineBlock(JsonObject params) {
-        int x = params.get("x").getAsInt();
-        int y = params.get("y").getAsInt();
-        int z = params.get("z").getAsInt();
+        int x = (int) params.get("x").getAsDouble();
+        int y = (int) params.get("y").getAsDouble();
+        int z = (int) params.get("z").getAsDouble();
 
         World world = agent.getLocation().getWorld();
         if (world == null) return;
@@ -100,9 +100,9 @@ public class ActionExecutor {
      * Place a block at the specified position.
      */
     private void placeBlock(JsonObject params) {
-        int x = params.get("x").getAsInt();
-        int y = params.get("y").getAsInt();
-        int z = params.get("z").getAsInt();
+        int x = (int) params.get("x").getAsDouble();
+        int y = (int) params.get("y").getAsDouble();
+        int z = (int) params.get("z").getAsDouble();
         String blockType = params.get("block_type").getAsString();
 
         World world = agent.getLocation().getWorld();
@@ -130,9 +130,9 @@ public class ActionExecutor {
      * Make the NPC look at a target position.
      */
     private void lookAt(JsonObject params) {
-        int x = params.get("x").getAsInt();
-        int y = params.get("y").getAsInt();
-        int z = params.get("z").getAsInt();
+        int x = (int) params.get("x").getAsDouble();
+        int y = (int) params.get("y").getAsDouble();
+        int z = (int) params.get("z").getAsDouble();
 
         NPC npc = agent.getNpc();
         if (npc != null && npc.isSpawned()) {
