@@ -136,22 +136,45 @@ class ValisAgent:
         blocks = perception.nearby_blocks
 
         if hint in ("mine", "place"):
-            # Find nearest solid, non-air block
-            solid_blocks = [b for b in blocks if b.get("type", "AIR") not in ("AIR", "CAVE_AIR", "VOID_AIR", "WATER", "LAVA")]
-            if solid_blocks:
-                target = min(solid_blocks, key=lambda b: abs(b.get("x", 0) - px) + abs(b.get("y", 0) - py) + abs(b.get("z", 0) - pz))
+            import random, re
+            # Priority mine targets: wood/log blocks first, then plan coordinates, then nearest
+            wood_blocks = [b for b in blocks if b.get("type", "").upper() in 
+                          ("OAK_LOG", "BIRCH_LOG", "SPRUCE_LOG", "JUNGLE_LOG", "ACACIA_LOG", 
+                           "DARK_OAK_LOG", "CHERRY_LOG", "MANGROVE_LOG", "OAK_WOOD", "BIRCH_WOOD",
+                           "OAK_LEAVES", "BIRCH_LEAVES", "SPRUCE_LEAVES", "JUNGLE_LEAVES")]
+            # Also check plan for specific coordinates
+            plan_text = " ".join(self.planner.daily_plan)
+            plan_coords = re.findall(r'\((-?\d+),\s*(-?\d+),\s*(-?\d+)\)', plan_text)
+            plan_targets = []
+            if plan_coords:
+                for pc in plan_coords:
+                    plan_targets.extend([b for b in blocks 
+                        if b.get("x",0) == int(pc[0]) and b.get("y",0) == int(pc[1]) and b.get("z",0) == int(pc[2])])
+            
+            target = None
+            if wood_blocks:
+                target = min(wood_blocks, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
+            elif plan_targets:
+                target = random.choice(plan_targets)
+            else:
+                solid_blocks = [b for b in blocks if b.get("type", "AIR") not in ("AIR", "CAVE_AIR", "VOID_AIR", "WATER", "LAVA")]
+                if solid_blocks:
+                    target = min(solid_blocks, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
+            
+            if target:
                 tx, ty, tz = target.get("x", px), target.get("y", py - 1), target.get("z", pz)
                 if hint == "mine":
                     return AgentAction(agent_name="", action="mine_block", params={"x": int(tx), "y": int(ty), "z": int(tz)})
                 else:
-                    # Place above nearest solid block, preferring AIR positions
                     inv = perception.inventory
                     place_mat = "dirt"
                     if inv:
-                        place_mat = max(inv, key=inv.get)
-                    # Try y+1 first, then y+2 if that position is also a solid block
+                        # Prefer most abundant, filtering non-placeables
+                        placeable = {k:v for k,v in inv.items() if k.lower() not in ("air", "wheat_seeds", "cornflower")}
+                        if placeable:
+                            place_mat = max(placeable, key=placeable.get)
                     above_y = int(ty) + 1
-                    above_blocked = any(b.get("x",0) == int(tx) and b.get("y",0) == above_y and b.get("z",0) == int(tz) for b in blocks)
+                    above_blocked = any(b.get("x",0)==int(tx) and b.get("y",0)==above_y and b.get("z",0)==int(tz) for b in blocks)
                     if above_blocked:
                         above_y = int(ty) + 2
                     return AgentAction(agent_name="", action="place_block",
