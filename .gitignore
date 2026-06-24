@@ -39,3 +39,4 @@ agent-brain/secrets/
 *.sqlite3
 agent-brain/data/
 agent-brain/chroma_data/
+.brain.pid
