@@ -176,18 +176,11 @@ class ValisAgent:
                 target_type = target.get("type", "").upper()
                 tx, ty, tz = target.get("x", px), target.get("y", py - 1), target.get("z", pz)
                 
-                # If hint is "mine" but target is just dirt/grass/stone, and we need wood, 
-                # and forest is nearby — fall through to move toward forest instead
+                # If hint is "mine" but target is just dirt/grass/stone, and we need wood,
+                # fall through to move/explore — don't waste time mining junk
                 has_wood = any(k in ("oak_log","birch_log","spruce_log","acacia_log","dark_oak_log","cherry_log") 
                               for k in perception.inventory)
-                nb = perception.nearby_biomes
-                forest_dir = None
-                if nb:
-                    for d, b in nb.items():
-                        if "forest" in b or "taiga" in b or "grove" in b:
-                            forest_dir = d
-                            break
-                if hint == "mine" and not has_wood and forest_dir and target_type in ("DIRT","GRASS_BLOCK","STONE","COBBLESTONE","SAND","GRAVEL","SHORT_GRASS"):
+                if hint == "mine" and not has_wood and target_type in ("DIRT","GRASS_BLOCK","STONE","COBBLESTONE","SAND","GRAVEL","SHORT_GRASS","ANDESITE","DIORITE","GRANITE","TUFF","DEEPSLATE"):
                     pass  # Fall through to move/explore block below
                 elif hint == "mine":
                     # Track position to avoid re-mining AIR on next tick

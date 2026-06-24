@@ -10,8 +10,6 @@ import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.event.player.PlayerTeleportEvent;
 
-import java.util.HashMap;
-import java.util.Map;
 import java.util.logging.Logger;
 
 /**
@@ -155,61 +153,57 @@ public class ActionExecutor {
     }
 
     /**
-     * Simple crafting system. Converts raw materials to products.
-     * Recipes: wood -> planks(4), cobblestone -> stone_pickaxe(1, costs 3),
-     *          planks + sticks -> wooden_pickaxe(1, costs 3 planks + 2 sticks)
+     * Dynamic crafting using Bukkit's vanilla recipe system.
+     * No hardcoded recipes — the server already knows all Minecraft recipes.
      */
-    private static final Map<String, Map<String, Integer>> RECIPES = new HashMap<>();
-    static {{
-        // Result material name -> {ingredient_name: amount}
-        RECIPES.put("oak_planks", Map.of("oak_log", 1));
-        RECIPES.put("birch_planks", Map.of("birch_log", 1));
-        RECIPES.put("spruce_planks", Map.of("spruce_log", 1));
-        RECIPES.put("jungle_planks", Map.of("jungle_log", 1));
-        RECIPES.put("acacia_planks", Map.of("acacia_log", 1));
-        RECIPES.put("dark_oak_planks", Map.of("dark_oak_log", 1));
-        RECIPES.put("cherry_planks", Map.of("cherry_log", 1));
-        RECIPES.put("stick", Map.of("oak_planks", 2));
-        RECIPES.put("crafting_table", Map.of("oak_planks", 4));
-        RECIPES.put("chest", Map.of("oak_planks", 8));
-        RECIPES.put("furnace", Map.of("cobblestone", 8));
-        RECIPES.put("wooden_pickaxe", Map.of("oak_planks", 3, "stick", 2));
-        RECIPES.put("stone_pickaxe", Map.of("cobblestone", 3, "stick", 2));
-        RECIPES.put("iron_pickaxe", Map.of("iron_ingot", 3, "stick", 2));
-        RECIPES.put("wooden_axe", Map.of("oak_planks", 3, "stick", 2));
-        RECIPES.put("stone_axe", Map.of("cobblestone", 3, "stick", 2));
-        RECIPES.put("wooden_sword", Map.of("oak_planks", 2, "stick", 1));
-        RECIPES.put("stone_sword", Map.of("cobblestone", 2, "stick", 1));
-        RECIPES.put("wooden_shovel", Map.of("oak_planks", 1, "stick", 2));
-        RECIPES.put("stone_shovel", Map.of("cobblestone", 1, "stick", 2));
-        RECIPES.put("wooden_hoe", Map.of("oak_planks", 2, "stick", 2));
-        RECIPES.put("torch", Map.of("stick", 1, "coal", 1));
-        RECIPES.put("oak_door", Map.of("oak_planks", 6));
-    }}
 
     private void craft(JsonObject params) {
-        String item = params.has("item") ? params.get("item").getAsString().toLowerCase() : "";
-        var recipe = RECIPES.get(item);
-        if (recipe == null) {
+        String itemName = params.has("item") ? params.get("item").getAsString().toLowerCase() : "";
+        Material resultMat = Material.matchMaterial(itemName.toUpperCase());
+        if (resultMat == null) {
             plugin.getWsBridge().sendActionResult(agent.getAgentName(), "craft",
-                    false, "unknown recipe: " + item + ". Known: " + String.join(", ", RECIPES.keySet()));
+                    false, "unknown item: " + itemName);
             return;
         }
-        for (var entry : recipe.entrySet()) {
-            if (!agent.removeFromInventory(entry.getKey(), entry.getValue())) {
+        // Look up vanilla recipe from Bukkit
+        var recipes = org.bukkit.Bukkit.getRecipesFor(new org.bukkit.inventory.ItemStack(resultMat));
+        boolean crafted = false;
+        for (var recipe : recipes) {
+            if (recipe instanceof org.bukkit.inventory.ShapedRecipe shaped) {
+                var ingredients = shaped.getIngredientMap();
+                boolean hasAll = true;
+                for (var entry : ingredients.entrySet()) {
+                    if (entry.getValue() == null || entry.getValue().getType() == Material.AIR) continue;
+                    String matName = entry.getValue().getType().name().toLowerCase();
+                    int needed = entry.getValue().getAmount();
+                    Integer has = agent.getInventory().get(matName);
+                    if (has == null || has < needed) { hasAll = false; break; }
+                }
+                if (!hasAll) continue;
+                for (var entry : ingredients.entrySet()) {
+                    if (entry.getValue() == null || entry.getValue().getType() == Material.AIR) continue;
+                    agent.removeFromInventory(entry.getValue().getType().name().toLowerCase(), entry.getValue().getAmount());
+                }
+                agent.addToInventory(resultMat, shaped.getResult().getAmount());
                 plugin.getWsBridge().sendActionResult(agent.getAgentName(), "craft",
-                        false, "missing " + entry.getKey() + " (need " + entry.getValue() + ")");
-                return;
+                        true, "crafted " + shaped.getResult().getAmount() + "x " + itemName);
+                crafted = true;
+                break;
             }
         }
-        int count = switch (item) {
-            case "stick" -> 4;
-            case "torch" -> 4;
-            default -> item.endsWith("_planks") ? 4 : 1;
-        };
-        agent.addToInventory(Material.valueOf(item.toUpperCase()), count);
-        plugin.getWsBridge().sendActionResult(agent.getAgentName(), "craft",
-                true, "crafted " + count + "x " + item);
+        if (!crafted && itemName.endsWith("_planks")) {
+            String logName = itemName.replace("_planks", "_log");
+            if (agent.getInventory().containsKey(logName)) {
+                agent.removeFromInventory(logName, 1);
+                agent.addToInventory(resultMat, 4);
+                plugin.getWsBridge().sendActionResult(agent.getAgentName(), "craft", true, "crafted 4x " + itemName);
+                crafted = true;
+            }
+        }
+        if (!crafted) {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "craft",
+                    false, "missing ingredients for " + itemName);
+        }
     }
 
     /**

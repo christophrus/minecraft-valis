@@ -92,17 +92,16 @@ public class WorldObserver {
      */
     private JsonArray observeBlocks(Location loc, World world) {
         JsonArray blocks = new JsonArray();
-        int r = Math.min(radius, 16); // Limit block sampling to prevent overload
+        int r = Math.min(radius, 12); // Slightly smaller radius, but step=1 for full coverage
         int bx = loc.getBlockX();
         int by = loc.getBlockY();
         int bz = loc.getBlockZ();
 
-        for (int dx = -r; dx <= r; dx += 2) {
-            for (int dz = -r; dz <= r; dz += 2) {
+        for (int dx = -r; dx <= r; dx += 1) {
+            for (int dz = -r; dz <= r; dz += 1) {
                 if (dx == 0 && dz == 0) continue;
-
-                // Sample at feet level and eye level
-                for (int dy = -1; dy <= 1; dy++) {
+                // Sample from feet (-1) up to +4 to capture tree trunks
+                for (int dy = -1; dy <= 4; dy++) {
                     Block block = world.getBlockAt(bx + dx, by + dy, bz + dz);
                     Material mat = block.getType();
                     if (mat != Material.AIR && mat != Material.CAVE_AIR && mat != Material.VOID_AIR) {
@@ -115,15 +114,13 @@ public class WorldObserver {
                         b.addProperty("relative_y", dy);
                         b.addProperty("relative_z", dz);
                         blocks.add(b);
-
-                        if (blocks.size() >= 50) break; // Cap to avoid huge payloads
+                        if (blocks.size() >= 80) break; // Cap for payload size
                     }
                 }
-                if (blocks.size() >= 50) break;
+                if (blocks.size() >= 80) break;
             }
-            if (blocks.size() >= 50) break;
+            if (blocks.size() >= 80) break;
         }
-
         return blocks;
     }
 
