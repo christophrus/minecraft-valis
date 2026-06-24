@@ -214,12 +214,23 @@ class ValisAgent:
             return None
 
         if hint in ("move", "explore", "mine", "place"):
-            import random, re, math
+            import random, re, math, time
+            # Don't interrupt ongoing navigation — wait for arrival or timeout
+            if hasattr(self, '_nav_target') and self._nav_target:
+                tx, ty, tz = self._nav_target
+                dist = math.sqrt((px - tx)**2 + (py - ty)**2 + (pz - tz)**2)
+                elapsed = time.time() - getattr(self, '_nav_start', 0)
+                if dist > 3 and elapsed < 8:  # Still navigating, let NPC walk
+                    return None  # Fall through to idle (don't cancel navigation)
+                self._nav_target = None  # Arrived or timed out
+            
             # Try to move towards a target from the daily plan
             plan_text = " ".join(self.planner.daily_plan)
             coords = re.findall(r'\((-?\d+),\s*(-?\d+),\s*(-?\d+)\)', plan_text)
             if coords and random.random() < 0.7:
                 tx, ty, tz = map(int, random.choice(coords))
+                self._nav_target = (tx, ty, tz)
+                self._nav_start = time.time()
                 return AgentAction(agent_name="", action="move_to",
                                    params={"x": tx, "y": ty, "z": tz})
             # Systematic exploration: bias toward forests if agent has no wood
@@ -248,8 +259,11 @@ class ValisAgent:
                 self._explore_heading = random.choice([(1, 0), (-1, 0), (0, 1), (0, -1)])
             dx, dz = self._explore_heading
             dist = random.randint(15, 30)
+            tx, ty, tz = px + dx * dist, py, pz + dz * dist
+            self._nav_target = (tx, ty, tz)
+            self._nav_start = time.time()
             return AgentAction(agent_name="", action="move_to",
-                               params={"x": px + dx * dist, "y": py, "z": pz + dz * dist})
+                               params={"x": tx, "y": ty, "z": tz})
 
         if hint in ("rest", "idle"):
             return AgentAction(agent_name="", action="idle")

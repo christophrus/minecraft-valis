@@ -60,7 +60,7 @@ public class ActionExecutor {
     }
 
     /**
-     * Teleport the NPC to a target position (reliable, instant).
+     * Navigate NPC using Citizens pathfinding with water enabled.
      */
     private void moveTo(JsonObject params) {
         int x = (int) params.get("x").getAsDouble();
@@ -79,9 +79,11 @@ public class ActionExecutor {
                     break;
                 }
             }
-            npc.teleport(target, PlayerTeleportEvent.TeleportCause.PLUGIN);
+            // Enable water navigation
+            npc.getNavigator().getLocalParameters().avoidWater(false);
+            npc.getNavigator().setTarget(target);
             plugin.getWsBridge().sendActionResult(agent.getAgentName(), "move_to",
-                    true, "teleported to " + x + "," + target.getBlockY() + "," + z);
+                    true, "navigating to " + x + "," + target.getBlockY() + "," + z);
         }
     }
 
