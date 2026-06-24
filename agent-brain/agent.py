@@ -171,16 +171,18 @@ class ValisAgent:
                 tx, ty, tz = map(int, random.choice(coords))
                 return AgentAction(agent_name="", action="move_to",
                                    params={"x": tx, "y": ty, "z": tz})
-            # Fallback: pick a far block from perception to explore
-            if blocks and random.random() < 0.7:
-                far = max(blocks, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("z",0)-pz))
-                return AgentAction(agent_name="", action="move_to",
-                                   params={"x": far.get("x", px), "y": far.get("y", py), "z": far.get("z", pz)})
-            # Last resort: random direction
-            dx = random.randint(-10, 10)
-            dz = random.randint(-10, 10)
+            # Systematic exploration: maintain heading instead of bouncing randomly
+            if not hasattr(self, '_explore_heading'):
+                self._explore_heading = random.choice([(1, 0), (-1, 0), (0, 1), (0, -1)])
+                self._explore_steps = 0
+            self._explore_steps += 1
+            if self._explore_steps > random.randint(5, 8):
+                self._explore_heading = random.choice([(1, 0), (-1, 0), (0, 1), (0, -1)])
+                self._explore_steps = 0
+            dx, dz = self._explore_heading
+            dist = random.randint(15, 30)
             return AgentAction(agent_name="", action="move_to",
-                               params={"x": px + dx, "y": py, "z": pz + dz})
+                               params={"x": px + dx * dist, "y": py, "z": pz + dz * dist})
 
         if hint in ("rest", "idle"):
             return AgentAction(agent_name="", action="idle")

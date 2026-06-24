@@ -25,6 +25,7 @@ class PerceptionData:
     nearby_entities: list[dict[str, Any]]  # [{type, name, x, y, z, distance, is_player}, ...]
     health: float = 20.0
     inventory: dict[str, int] = field(default_factory=dict)  # material_name -> count
+    biome: str = "plains"
 
     @classmethod
     def from_json(cls, data: dict) -> "PerceptionData":
@@ -39,6 +40,7 @@ class PerceptionData:
             nearby_entities=data.get("nearby_entities", []),
             health=data.get("health", 20.0),
             inventory=data.get("inventory", {}),
+            biome=data.get("biome", "plains"),
         )
 
 

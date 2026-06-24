@@ -54,6 +54,10 @@ class PerceptionProcessor:
             f"I am at position ({pos.get('x', 0)}, {pos.get('y', 0)}, {pos.get('z', 0)})."
         )
 
+        # Biome
+        if p.biome:
+            lines.append(f"The biome is {p.biome}.")
+
         # Nearby blocks (with positions so agent knows WHERE to act)
         if p.nearby_blocks:
             block_descs = []

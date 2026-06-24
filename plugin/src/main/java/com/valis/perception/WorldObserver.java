@@ -55,6 +55,10 @@ public class WorldObserver {
         report.addProperty("weather", world.isThundering() ? "thunder" :
                 world.hasStorm() ? "rain" : "clear");
 
+        // Biome
+        var biome = world.getBiome(loc);
+        report.addProperty("biome", biome.getKey().getKey().replace("_", " "));
+
         // Nearby blocks (sample key blocks within radius)
         report.add("nearby_blocks", observeBlocks(loc, world));
 
