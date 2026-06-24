@@ -79,37 +79,50 @@ class CognitiveController:
                 f"  - {d}" for d in discrepancies
             )
 
-        prompt = f"""You are the cognitive controller for {agent.name}, an AI agent in Minecraft.
+        prompt = f"""You control {agent.name}, an AI in Minecraft. Pick ONE action.
 
-Your job is to synthesize all inputs and produce ONE high-level decision.
+RAW MATERIALS I CARRY: {inv_text}
 
-INPUTS:
----
-Perception:
+PERCEPTION:
 {perception_text}
 
-Social context:
-{social_text}
-
-Goals:
+GOALS:
 {goal_text}
 
-Inventory: {inv_text}
+SOCIAL: {social_text}
 
-Recent memories:
 {memory_text}
-
 {discrepancy_text}
----
 
-Output a JSON object with these fields:
-- "intent": What you intend to do (one sentence)
-- "reason": Why you chose this intent (one sentence)
-- "priority": A number 0-10 indicating urgency
-- "action_hint": One of: move, mine, place, craft, explore, socialize, rest
-- "chat_hint": What to say (empty string if not speaking)
+DECISION RULES — choose action_hint:
 
-Output ONLY the JSON, nothing else."""
+mine  = Break a block to get resources. Use when: you see wood, stone, coal, iron, or need dirt for shelter. Include coordinates in intent like "Mine oak_log at (12,64,-8)".
+
+craft = Turn raw materials into items. Use when you carry materials for a needed tool/block AND don't have it yet. CRITICAL: if inventory has logs but no planks → CRAFT. If planks ≥4 and no crafting_table → CRAFT. If planks≥3 + sticks≥2 and no pickaxe → CRAFT. The basic chain (log→plank→stick→pickaxe) runs automatically — YOU decide complex crafts like crafting_table, furnace, stone tools, doors.
+
+CRAFTING RECIPES:
+- 1 log → 4 planks (any wood)
+- 4 planks → crafting_table (needed for 3×3 recipes!)
+- 2 planks → 4 sticks
+- 3 planks + 2 sticks → wooden_pickaxe
+- 3 planks + 2 sticks → wooden_axe
+- 2 planks + 1 stick → wooden_sword
+- 8 cobblestone → furnace (need crafting_table)
+- 3 cobblestone + 2 sticks → stone_pickaxe (need crafting_table)
+- 6 planks → 2 doors
+
+place = Put a block in the world. Use when: building shelter, placing crafting_table, or blocking yourself in at night.
+
+move  = Walk to coordinates or toward a biome/structure. Include coords if known.
+
+explore = Systematic exploration when you don't know what's around. Move further than 'move'.
+
+socialize = Talk to nearby players/villagers.
+
+rest/idle = Do nothing (only when waiting or nothing useful to do).
+
+Output ONLY valid JSON:
+{{"intent": "what and where", "reason": "why", "priority": 0-10, "action_hint": "one of the above", "chat_hint": "or empty"}}"""
 
         import json, re
         for attempt in range(2):
