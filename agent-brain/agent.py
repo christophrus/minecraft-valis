@@ -152,11 +152,14 @@ class ValisAgent:
                 # Block not in perception, but still navigate there
                 intent_target = {"x": ix, "y": iy, "z": iz, "type": "UNKNOWN"}
 
-        # --- Recently mined tracking ---
+        # --- Recently mined / failed-place tracking ---
         if not hasattr(self, '_recently_mined'):
             self._recently_mined: dict[str, float] = {}
+        if not hasattr(self, '_recently_failed_place'):
+            self._recently_failed_place: dict[str, float] = {}
         now = time.time()
         self._recently_mined = {k: v for k, v in self._recently_mined.items() if now - v < 5}
+        self._recently_failed_place = {k: v for k, v in self._recently_failed_place.items() if now - v < 10}
         def pos_key(b): return f"{b.get('x',0)},{b.get('y',0)},{b.get('z',0)}"
 
         if hint in ("mine", "place"):
@@ -219,17 +222,27 @@ class ValisAgent:
                             "oak_wood", "spruce_wood", "birch_wood")}
                         if placeable:
                             place_mat = max(placeable, key=placeable.get)
-                    above_y = int(ty) + 1
-                    for dy in range(1, 4):
+                    # Find free air above target, skip recently failed Y levels
+                    above_y = None
+                    for dy in range(1, 6):
                         test_y = int(ty) + dy
-                        blocked = any(b.get("x",0)==int(tx) and b.get("y",0)==test_y and b.get("z",0)==int(tz) for b in blocks)
+                        test_key = f"{int(tx)},{test_y},{int(tz)}"
+                        if test_key in self._recently_failed_place:
+                            continue
+                        blocked = any(b.get("x",0)==int(tx) and b.get("y",0)==test_y and b.get("z",0)==int(tz)
+                                      and b.get("type","").upper() not in ("AIR","CAVE_AIR","VOID_AIR") for b in blocks)
                         if not blocked:
                             above_y = test_y
                             break
-                    if place_mat == "dirt" and inv.get("oak_log", 0) >= 1:
+                    if above_y is None:
+                        self._recently_failed_place[f"{int(tx)},{int(ty)},{int(tz)}"] = now
+                        logger.debug(f"FAST-PATH: place all Y blocked at ({int(tx)},{int(tz)}), falling through")
+                        pass  # Fall through to explore
+                    elif place_mat == "dirt" and inv.get("oak_log", 0) >= 1:
                         return None  # Let LLM decide to craft
-                    return AgentAction(agent_name="", action="place_block",
-                                       params={"block_type": place_mat, "x": int(tx), "y": above_y, "z": int(tz)})
+                    else:
+                        return AgentAction(agent_name="", action="place_block",
+                                           params={"block_type": place_mat, "x": int(tx), "y": above_y, "z": int(tz)})
             # No target found, fall through to move
             logger.debug(f"FAST-PATH: no target in mine/place, falling to explore")
 
@@ -239,14 +252,14 @@ class ValisAgent:
 
         if hint in ("move", "explore", "mine", "place"):
             import math
-            # Don't interrupt ongoing navigation
+            # Don't interrupt ongoing navigation — idle directly (skip LLM fallback)
             if hasattr(self, '_nav_target') and self._nav_target:
                 tx, ty, tz = self._nav_target
                 dist = math.sqrt((px - tx)**2 + (py - ty)**2 + (pz - tz)**2)
                 elapsed = time.time() - getattr(self, '_nav_start', 0)
                 if dist > 3 and elapsed < 8:
                     logger.debug(f"FAST-PATH: waiting for nav, dist={dist:.1f} elapsed={elapsed:.1f}s")
-                    return None
+                    return AgentAction(agent_name="", action="idle")
                 self._nav_target = None
             
             # Priority 1: Use LLM intent coordinates for navigation

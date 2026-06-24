@@ -20,6 +20,7 @@ agent-brain/.env
 agent-brain/*.pyc
 agent-brain/dist/
 agent-brain/*.egg-info/
+agent-brain/debug_logs/
 
 # IDE
 .idea/

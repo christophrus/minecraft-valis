@@ -52,6 +52,7 @@ from bridge.client import BridgeClient
 from agent import AgentManager
 
 logger = logging.getLogger("valis")
+logger.setLevel(logging.DEBUG)  # Let DEBUG through to file handler (console stays at INFO)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
