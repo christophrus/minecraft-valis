@@ -220,15 +220,24 @@ class ValisAgent:
                     tx, ty, tz = target.get("x", px), target.get("y", py - 1), target.get("z", pz)
                 
                 # If hint is "mine" but target is junk and we need wood → explore instead
-                # BUT: always respect LLM intent targets (priority 1)
+                # BUT: always respect LLM intent (priority 1), plan targets (priority 3),
+                #      and survival mode (nighttime = mine whatever is available)
                 has_wood = any(k in ("oak_log","birch_log","spruce_log","acacia_log","dark_oak_log","cherry_log") 
                               for k in perception.inventory)
                 junk_types = ("DIRT","GRASS_BLOCK","STONE","COBBLESTONE","SAND","GRAVEL","SHORT_GRASS",
                               "ANDESITE","DIORITE","GRANITE","TUFF","DEEPSLATE")
-                if hint == "mine" and target_priority > 1 and not has_wood and target_type in junk_types:
+                is_night = not perception.is_day
+                skip_junk_filter = (target_priority <= 2  # intent or wood heuristic
+                                   or target_priority == 3  # plan targets are LLM-authored
+                                   or is_night)  # nighttime = survival mode, mine anything
+                if hint == "mine" and not skip_junk_filter and not has_wood and target_type in junk_types:
                     logger.debug(f"FAST-PATH: skipping junk target (priority={target_priority}, type={target_type}), fall to explore")
                     pass  # Fall through to move/explore
                 elif hint == "mine":
+                    if is_night and target_type in junk_types and not has_wood:
+                        logger.debug(f"FAST-PATH: night override — mining {target_type} for survival")
+                    elif target_priority == 3 and target_type in junk_types and not has_wood:
+                        logger.debug(f"FAST-PATH: plan override — mining {target_type} from LLM plan")
                     tkey = f"{int(tx)},{int(ty)},{int(tz)}"
                     if tkey in self._recently_placed:
                         logger.debug(f"FAST-PATH: skip mine of recently placed block at ({int(tx)},{int(ty)},{int(tz)})")
