@@ -241,9 +241,11 @@ class ValisAgent:
                         test_key = f"{int(tx)},{test_y},{int(tz)}"
                         if test_key in self._recently_failed_place or test_key in self._recently_placed:
                             continue
+                        # Check if position is within perception range at all
+                        in_range = any(b.get("x",0)==int(tx) and b.get("z",0)==int(tz) for b in blocks)
                         blocked = any(b.get("x",0)==int(tx) and b.get("y",0)==test_y and b.get("z",0)==int(tz)
                                       and b.get("type","").upper() not in ("AIR","CAVE_AIR","VOID_AIR") for b in blocks)
-                        if not blocked:
+                        if not blocked and in_range:
                             above_y = test_y
                             break
                     if above_y is None:

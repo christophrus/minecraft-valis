@@ -64,6 +64,13 @@ Format: one task per line, starting with a dash (-)."""
             {"role": "system", "content": "You are an AI agent in Minecraft. Output only the task list, no preamble."},
             {"role": "user", "content": prompt},
         ])
+        # Retry once if empty response
+        if not response or not response.strip():
+            logger.warning(f"Agent {agent.name} plan LLM returned empty, retrying...")
+            response = await agent.llm.chat([
+                {"role": "system", "content": "You MUST output a task list. Each line starting with a dash. Example: - Gather wood"},
+                {"role": "user", "content": prompt},
+            ])
 
         # Parse tasks from response
         tasks = []
@@ -160,6 +167,13 @@ Respond with exactly ONE action in format: action_name(param1=value1, param2=val
             {"role": "system", "content": "You control a Minecraft agent. Output ONLY the action, nothing else."},
             {"role": "user", "content": prompt},
         ])
+        # Retry once if empty response
+        if not response or not response.strip():
+            logger.warning(f"Agent {agent.name} decide_action LLM returned empty, retrying...")
+            response = await agent.llm.chat([
+                {"role": "system", "content": "Output EXACTLY one action. Example: move_to(x=10, y=64, z=20). No other text."},
+                {"role": "user", "content": prompt},
+            ])
 
         return response.strip()
 
