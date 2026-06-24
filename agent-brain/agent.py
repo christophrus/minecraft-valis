@@ -161,7 +161,7 @@ class ValisAgent:
             self._recently_failed_place: dict[str, float] = {}
         now = time.time()
         self._recently_mined = {k: v for k, v in self._recently_mined.items() if now - v < 5}
-        self._recently_placed = {k: v for k, v in self._recently_placed.items() if now - v < 30}
+        self._recently_placed = {k: v for k, v in self._recently_placed.items() if now - v < 120}
         self._recently_failed_place = {k: v for k, v in self._recently_failed_place.items() if now - v < 10}
         def pos_key(b): return f"{b.get('x',0)},{b.get('y',0)},{b.get('z',0)}"
 
@@ -173,8 +173,8 @@ class ValisAgent:
                 target = intent_target
                 logger.debug(f"FAST-PATH: TARGET=intent -> {target.get('type','?')} at ({target.get('x')},{target.get('y')},{target.get('z')})")
             
-            # Priority 2: Wood/log blocks nearby
-            if target is None:
+            # Priority 2: Wood/log blocks nearby (only for mine, not place!)
+            if target is None and hint == "mine":
                 wood_blocks = [b for b in blocks if b.get("type", "").upper() in 
                               ("OAK_LOG", "BIRCH_LOG", "SPRUCE_LOG", "JUNGLE_LOG", "ACACIA_LOG", 
                                "DARK_OAK_LOG", "CHERRY_LOG", "MANGROVE_LOG", "OAK_WOOD", "BIRCH_WOOD")]
@@ -204,7 +204,11 @@ class ValisAgent:
             
             if target:
                 target_type = target.get("type", "").upper()
-                tx, ty, tz = target.get("x", px), target.get("y", py - 1), target.get("z", pz)
+                # For place: use agent's foot Y as base; for mine: use target's Y
+                if hint == "place":
+                    tx, ty, tz = target.get("x", px), py, target.get("z", pz)
+                else:
+                    tx, ty, tz = target.get("x", px), target.get("y", py - 1), target.get("z", pz)
                 
                 # If hint is "mine" but target is junk and we need wood → explore instead
                 has_wood = any(k in ("oak_log","birch_log","spruce_log","acacia_log","dark_oak_log","cherry_log") 
