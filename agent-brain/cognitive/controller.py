@@ -60,6 +60,10 @@ class CognitiveController:
         # Goal context
         goal_text = "\n".join(f"- {g}" for g in agent.goals)
 
+        # Inventory context
+        inv = agent._pending_perception.inventory if agent._pending_perception else {}
+        inv_text = ", ".join(f"{k}: {v}" for k, v in inv.items()) if inv else "empty"
+
         # Recent memories (trimmed for speed)
         recent = agent.memory.get_recent(n=3)
         memory_text = "\n".join(
@@ -81,6 +85,8 @@ Social context:
 
 Goals:
 {goal_text}
+
+Inventory: {inv_text}
 
 Recent memories:
 {memory_text}

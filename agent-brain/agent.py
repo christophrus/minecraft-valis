@@ -165,8 +165,20 @@ class ValisAgent:
             # Nothing craftable — fall through to move
 
         if hint in ("move", "explore", "mine", "place"):
-            # Move to a random nearby coordinate (explore)
-            import random
+            # Try to move towards a target from the daily plan
+            import random, re
+            plan_text = " ".join(self.planner.daily_plan)
+            coords = re.findall(r'\((-?\d+),\s*(-?\d+),\s*(-?\d+)\)', plan_text)
+            if coords and random.random() < 0.7:
+                tx, ty, tz = map(int, random.choice(coords))
+                return AgentAction(agent_name="", action="move_to",
+                                   params={"x": tx, "y": ty, "z": tz})
+            # Fallback: pick a far block from perception to explore
+            if blocks and random.random() < 0.7:
+                far = max(blocks, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("z",0)-pz))
+                return AgentAction(agent_name="", action="move_to",
+                                   params={"x": far.get("x", px), "y": far.get("y", py), "z": far.get("z", pz)})
+            # Last resort: random direction
             dx = random.randint(-10, 10)
             dz = random.randint(-10, 10)
             return AgentAction(agent_name="", action="move_to",
