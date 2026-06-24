@@ -101,6 +101,11 @@ class BridgeClient:
                 name = data.get("agent_name", "")
                 logger.info(f"Agent despawned confirmed: {name}")
 
+            case "chat":
+                agent_name = data.get("agent_name", data.get("name", ""))
+                text = data.get("text", data.get("data", {}).get("text", ""))
+                logger.info(f"[CHAT] {agent_name}: {text}")
+
             case _:
                 logger.debug(f"Unhandled message type: {msg_type}")
 
@@ -116,6 +121,7 @@ class BridgeClient:
         await self.send(action.to_json())
 
     async def send_chat(self, chat: AgentChat):
+        logger.info(f"Agent {chat.agent_name} chat: {chat.text}")
         await self.send(chat.to_json())
 
     async def send_spawn(self, request: SpawnRequest):
