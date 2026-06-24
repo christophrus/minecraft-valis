@@ -127,6 +127,41 @@ class ValisAgent:
         self._perception_event.set()  # Unblock any waiting
         logger.info(f"Agent {self.name} stopped.")
 
+    def _decision_to_action(self, decision, perception: PerceptionData) -> AgentAction | None:
+        """Convert controller decision directly to an action using perception data.
+        Returns None if LLM fallback is needed (complex actions like chat/craft)."""
+        hint = decision.action_hint.lower()
+        pos = perception.position
+        px, py, pz = int(pos.get("x", 0)), int(pos.get("y", 0)), int(pos.get("z", 0))
+        blocks = perception.nearby_blocks
+
+        if hint in ("mine", "place"):
+            # Find nearest solid, non-air block
+            solid_blocks = [b for b in blocks if b.get("type", "AIR") not in ("AIR", "CAVE_AIR", "VOID_AIR", "WATER", "LAVA")]
+            if solid_blocks:
+                target = min(solid_blocks, key=lambda b: abs(b.get("x", 0) - px) + abs(b.get("y", 0) - py) + abs(b.get("z", 0) - pz))
+                tx, ty, tz = target.get("x", px), target.get("y", py - 1), target.get("z", pz)
+                if hint == "mine":
+                    return AgentAction(agent_name="", action="mine_block", params={"x": int(tx), "y": int(ty), "z": int(tz)})
+                else:
+                    return AgentAction(agent_name="", action="place_block",
+                                       params={"block_type": "DIRT", "x": int(tx), "y": int(ty) + 1, "z": int(tz)})
+            # No solid blocks nearby — fall through to move
+
+        if hint in ("move", "explore", "mine", "place"):
+            # Move to a random nearby coordinate (explore)
+            import random
+            dx = random.randint(-10, 10)
+            dz = random.randint(-10, 10)
+            return AgentAction(agent_name="", action="move_to",
+                               params={"x": px + dx, "y": py, "z": pz + dz})
+
+        if hint in ("rest", "idle"):
+            return AgentAction(agent_name="", action="idle")
+
+        # Complex actions: fall back to LLM
+        return None
+
     def receive_perception(self, perception: PerceptionData):
         """Called when new perception data arrives from Minecraft."""
         self.perception_processor.update(perception)
@@ -177,7 +212,7 @@ class ValisAgent:
                 return
 
             # Step 2: Generate goals periodically
-            if self.tick_count % 30 == 0:  # Every ~60 seconds at 2s tick rate
+            if self.tick_count % 30 == 0:
                 await self.goal_generator.generate_goals(
                     self,
                     self.perception_processor.build_context_text(),
@@ -192,12 +227,16 @@ class ValisAgent:
                 if not self._running:
                     return
 
-            # Step 4: Decide specific action
-            action_str = await self.planner.decide_action(self)
-            if not self._running:
-                return
-            logger.info(f"Agent {self.name} tick {self.tick_count}: LLM action = '{action_str}'")
-            parsed = self.executor.parse_action(action_str)
+            # Step 4: Convert controller decision directly to action (fast path)
+            parsed = self._decision_to_action(decision, perception)
+            if parsed is None:
+                # Fallback: LLM action decision for complex cases
+                action_str = await self.planner.decide_action(self)
+                if not self._running:
+                    return
+                parsed = self.executor.parse_action(action_str)
+
+            logger.info(f"Agent {self.name} tick {self.tick_count}: {parsed.action} {parsed.params}")
 
             # Step 5: Execute action via bridge
             if parsed and self.bridge:
