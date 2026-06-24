@@ -240,12 +240,12 @@ class ValisAgent:
                             forest_dirs.append(dir_map[d])
                 if forest_dirs:
                     self._explore_heading = random.choice(forest_dirs)
-            if self._explore_heading is None:
-                self._explore_heading = random.choice([(1, 0), (-1, 0), (0, 1), (0, -1)])
             self._explore_steps += 1
             if self._explore_steps > random.randint(8, 15):
                 self._explore_heading = None
                 self._explore_steps = 0
+            if self._explore_heading is None:
+                self._explore_heading = random.choice([(1, 0), (-1, 0), (0, 1), (0, -1)])
             dx, dz = self._explore_heading
             dist = random.randint(15, 30)
             return AgentAction(agent_name="", action="move_to",
