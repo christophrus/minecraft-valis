@@ -9,6 +9,7 @@ import org.jetbrains.annotations.NotNull;
  * Admin commands for controlling the Valis simulation.
  * /valis spawn <name> [personality] - Spawn a new AI agent
  * /valis despawn <name> - Remove an AI agent
+ * /valis tp <name> - Teleport to an AI agent
  * /valis list - List all active agents
  * /valis status - Show simulation status
  */
@@ -24,7 +25,7 @@ public class ValisCommand implements CommandExecutor {
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command cmd,
                              @NotNull String label, String[] args) {
         if (args.length == 0) {
-            sender.sendMessage("§6[Valis] §eUsage: /valis <spawn|despawn|list|status>");
+            sender.sendMessage("§6[Valis] §eUsage: /valis <spawn|despawn|tp|list|status>");
             return true;
         }
 
@@ -79,6 +80,25 @@ public class ValisCommand implements CommandExecutor {
                         sender.sendMessage("  §7- §f" + entry.getKey());
                     }
                 }
+            }
+            case "tp" -> {
+                if (args.length < 2) {
+                    sender.sendMessage("§6[Valis] §eUsage: /valis tp <name>");
+                    return true;
+                }
+                String name = args[1];
+                var agent = plugin.getAgents().get(name);
+                if (agent == null) {
+                    sender.sendMessage("§6[Valis] §7Agent not found: " + name);
+                    return true;
+                }
+                var player = plugin.getServer().getPlayer(sender.getName());
+                if (player == null) {
+                    sender.sendMessage("§6[Valis] §cOnly players can use this command.");
+                    return true;
+                }
+                player.teleport(agent.getLocation());
+                sender.sendMessage("§6[Valis] §aTeleported to " + name);
             }
             case "status" -> {
                 sender.sendMessage("§6[Valis] §eStatus:");
