@@ -61,7 +61,7 @@ public class WorldObserver {
 
         // Nearby biomes (scan 100 blocks in cardinal directions)
         JsonObject nearbyBiomes = new JsonObject();
-        int bd = 100;
+        int bd = 300;
         int bx = loc.getBlockX(), by = loc.getBlockY(), bz = loc.getBlockZ();
         var northB = world.getBiome(bx, by, bz - bd);
         var southB = world.getBiome(bx, by, bz + bd);
