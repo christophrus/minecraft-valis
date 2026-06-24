@@ -59,13 +59,27 @@ class OpenAIProvider(LLMProvider):
 
     async def chat(self, messages: list[dict[str, str]]) -> str:
         model = self.config.model or "gpt-4o"
-        response = await self.client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=self.config.temperature,
-            max_tokens=self.config.max_tokens,
-        )
-        return response.choices[0].message.content or ""
+        try:
+            response = await self.client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=self.config.temperature,
+                max_tokens=self.config.max_tokens,
+            )
+            choice = response.choices[0]
+            content = choice.message.content or ""
+            finish = choice.finish_reason or "unknown"
+            if not content:
+                logger.warning(
+                    f"LLM ({model}) empty content. "
+                    f"finish_reason={finish} "
+                    f"prompt_tokens={response.usage.prompt_tokens if response.usage else '?'} "
+                    f"completion_tokens={response.usage.completion_tokens if response.usage else '?'}"
+                )
+            return content
+        except Exception as e:
+            logger.error(f"LLM ({model}) API call FAILED: {type(e).__name__}: {e}")
+            return ""
 
     async def embed(self, text: str) -> list[float]:
         model = self.config.extra.get("embedding_model", "text-embedding-3-small")
