@@ -23,7 +23,7 @@ class LLMConfig:
     provider: str  # "openai", "anthropic", "ollama"
     model: str = ""
     temperature: float = 0.7
-    max_tokens: int = 1024
+    max_tokens: int = 4096
     api_key: str = ""
     base_url: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
@@ -76,6 +76,12 @@ class OpenAIProvider(LLMProvider):
                     f"prompt_tokens={response.usage.prompt_tokens if response.usage else '?'} "
                     f"completion_tokens={response.usage.completion_tokens if response.usage else '?'}"
                 )
+                # Dump raw message to diagnose format issues
+                msg = choice.message
+                logger.debug(f"LLM raw message: role={msg.role} content_type={type(msg.content).__name__} "
+                           f"content_repr={repr(msg.content)[:200]} "
+                           f"tool_calls={getattr(msg, 'tool_calls', None)} "
+                           f"refusal={getattr(msg, 'refusal', None)}")
             return content
         except Exception as e:
             logger.error(f"LLM ({model}) API call FAILED: {type(e).__name__}: {e}")
