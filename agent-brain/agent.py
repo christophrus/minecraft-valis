@@ -170,6 +170,8 @@ class ValisAgent:
         try:
             # Step 1: Run Cognitive Controller (PIANO bottleneck)
             decision = await self.controller.decide(self)
+            if not self._running:
+                return
 
             # Step 2: Generate goals periodically
             if self.tick_count % 30 == 0:  # Every ~60 seconds at 2s tick rate
@@ -178,13 +180,19 @@ class ValisAgent:
                     self.perception_processor.build_context_text(),
                     self.social_awareness.get_social_context(),
                 )
+                if not self._running:
+                    return
 
             # Step 3: Plan action (first tick or when task changes)
             if self.tick_count == 1 or self.tick_count % 10 == 0:
                 await self.planner.plan_daily(self)
+                if not self._running:
+                    return
 
             # Step 4: Decide specific action
             action_str = await self.planner.decide_action(self)
+            if not self._running:
+                return
             logger.info(f"Agent {self.name} tick {self.tick_count}: LLM action = '{action_str}'")
             parsed = self.executor.parse_action(action_str)
 
