@@ -133,13 +133,16 @@ class ValisAgent:
         self._pending_perception = perception
         self._perception_event.set()
 
-    def receive_action_result(self, result: ActionResult):
+    async def receive_action_result(self, result: ActionResult):
         """Called when an action result comes back from Minecraft."""
-        self.action_awareness.observe(
+        record = self.action_awareness.observe(
             action_id=result.action,
             success=result.success,
             details=result.details,
         )
+        if record and record.discrepancy:
+            await self.action_awareness.learn_from_discrepancy(self, record)
+            logger.info(f"Agent {self.name} learned: {record.discrepancy}")
         logger.debug(f"Agent {self.name} action result: {result.action} -> {'OK' if result.success else 'FAIL'}: {result.details}")
         self._perception_event.set()  # Wake cognitive loop to process result
 
@@ -303,7 +306,7 @@ class AgentManager:
         """Route action result to the correct agent."""
         agent = self.agents.get(result.agent_name)
         if agent:
-            agent.receive_action_result(result)
+            await agent.receive_action_result(result)
 
     async def run_tick_loop(self):
         """

@@ -27,7 +27,7 @@ class Reflection:
 
     def __init__(self):
         self.importance_counter: float = 0.0
-        self.importance_threshold: float = 150.0
+        self.importance_threshold: float = 30.0  # Trigger after ~10 priority-3 decisions
         self.reflection_count: int = 0
         self.last_reflection_time: float = 0.0
 

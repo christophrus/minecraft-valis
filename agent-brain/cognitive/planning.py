@@ -93,10 +93,19 @@ Format: one task per line, starting with a dash (-)."""
         query = f"What should I do now? Current task: {self.current_task}. {context}"
         memories = await agent.retrieval.retrieve(query, limit=5)
 
+        # Relevant memories
         memory_text = "\n".join(
             f"- [{m.created.strftime('%H:%M')}] {m.content}"
             for m in memories
         )
+
+        # Recent action failures — what NOT to repeat
+        discrepancies = agent.action_awareness.get_recent_discrepancies(n=3)
+        discrepancy_text = ""
+        if discrepancies:
+            discrepancy_text = "Recent mistakes to avoid:\n" + "\n".join(
+                f"  - {d}" for d in discrepancies
+            )
 
         prompt = f"""You are {agent.name} in Minecraft. You must choose ONE action to perform right now.
 
@@ -110,6 +119,8 @@ Current task: {self.current_task}
 
 Relevant memories:
 {memory_text}
+
+{discrepancy_text}
 
 Available actions:
 - move_to(x, y, z): Walk to coordinates

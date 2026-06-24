@@ -54,12 +54,14 @@ class PerceptionProcessor:
             f"I am at position ({pos.get('x', 0)}, {pos.get('y', 0)}, {pos.get('z', 0)})."
         )
 
-        # Nearby blocks (summary)
+        # Nearby blocks (with positions so agent knows WHERE to act)
         if p.nearby_blocks:
-            block_types = set()
-            for b in p.nearby_blocks[:30]:
-                block_types.add(b.get("type", "unknown"))
-            lines.append(f"Nearby blocks include: {', '.join(sorted(block_types)[:15])}.")
+            block_descs = []
+            for b in p.nearby_blocks[:10]:
+                btype = b.get("type", "?")
+                bx, by, bz = b.get("x", 0), b.get("y", 0), b.get("z", 0)
+                block_descs.append(f"{btype}({bx},{by},{bz})")
+            lines.append(f"Nearby blocks: {', '.join(block_descs)}.")
 
         # Nearby entities
         if p.nearby_entities:
