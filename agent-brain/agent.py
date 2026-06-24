@@ -306,8 +306,19 @@ class ValisAgent:
                         import math
                         dist_to_target = math.sqrt((px-tx)**2 + (py-ty)**2 + (pz-tz)**2)
                         if dist_to_target > 4:
-                            logger.debug(f"FAST-PATH: mine target too far ({dist_to_target:.0f}m), navigate first")
-                            pass  # Fall through to move/explore → will navigate via intent_coords
+                            # Track repeated attempts to reach the same far mine target
+                            far_key = f"{int(tx)},{int(ty)},{int(tz)}"
+                            if not hasattr(self, '_far_target_attempts'):
+                                self._far_target_attempts: dict = {}
+                            self._far_target_attempts[far_key] = self._far_target_attempts.get(far_key, 0) + 1
+                            attempts = self._far_target_attempts[far_key]
+                            if attempts >= 3:
+                                logger.debug(f"FAST-PATH: far target retried {attempts}x — picking nearest wood instead")
+                                self._far_target_attempts = {}
+                                # Don't pass — force fallback to nearest solid/wood
+                            else:
+                                logger.debug(f"FAST-PATH: mine target too far ({dist_to_target:.0f}m), navigate (attempt {attempts}/3)")
+                            pass  # Fall through to move/explore
                         else:
                             self._recently_mined[tkey] = now
                             return AgentAction(agent_name="", action="mine_block", params={"x": int(tx), "y": int(ty), "z": int(tz)})
@@ -590,6 +601,7 @@ class ValisAgent:
 
         # --- NAV debug: track position changes since last move_to ---
         if hasattr(self, '_last_move_info') and self._last_move_info:
+            import time as _time
             lmi = self._last_move_info
             lpx, lpy, lpz = lmi["from_pos"]
             cpx = perception.position.get("x", 0)
@@ -597,7 +609,7 @@ class ValisAgent:
             cpz = perception.position.get("z", 0)
             pos_moved = abs(cpx - lpx) > 0.5 or abs(cpy - lpy) > 0.5 or abs(cpz - lpz) > 0.5
             ticks_since = self.tick_count - lmi["tick"]
-            elapsed = time.time() - lmi["time"]
+            elapsed = _time.time() - lmi["time"]
             if pos_moved:
                 logger.debug(f"NAV-PROGRESS: moved from ({lpx},{lpy},{lpz}) to ({cpx:.0f},{cpy:.0f},{cpz:.0f}) after {ticks_since}t ({elapsed:.1f}s)")
                 self._last_move_info = {}  # Reset tracker on position change
@@ -701,18 +713,24 @@ class ValisAgent:
 
             # --- TRACK move_to execution ---
             if parsed and parsed.action == "move_to":
-                now = time.time()
+                import time as _time
+                ppos = perception.position if perception else {}
+                _px = ppos.get("x", 0)
+                _py = ppos.get("y", 0)
+                _pz = ppos.get("z", 0)
                 if not hasattr(self, '_last_move_info'):
                     self._last_move_info: dict = {}
-                tx = parsed.params.get("x", px)
-                ty = parsed.params.get("y", py)
-                tz = parsed.params.get("z", pz)
+                tx = parsed.params.get("x", _px)
+                ty = parsed.params.get("y", _py)
+                tz = parsed.params.get("z", _pz)
+                import math as _math
+                dist = _math.sqrt((_px-tx)**2 + (_py-ty)**2 + (_pz-tz)**2)
                 self._last_move_info = {
-                    "tick": self.tick_count, "time": now,
+                    "tick": self.tick_count, "time": _time.time(),
                     "target": (tx, ty, tz),
-                    "from_pos": (px, py, pz),
+                    "from_pos": (_px, _py, _pz),
                 }
-                logger.debug(f"NAV-SEND: tick={self.tick_count} from=({px},{py},{pz}) to=({tx},{ty},{tz}) dist={math.sqrt((px-tx)**2+(py-ty)**2+(pz-tz)**2):.0f}m")
+                logger.debug(f"NAV-SEND: tick={self.tick_count} from=({_px:.0f},{_py:.0f},{_pz:.0f}) to=({tx:.0f},{ty:.0f},{tz:.0f}) dist={dist:.0f}m")
 
             logger.info(f"Agent {self.name} tick {self.tick_count}: {parsed.action} {parsed.params}")
 
