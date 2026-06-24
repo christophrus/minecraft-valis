@@ -28,8 +28,8 @@ def _check_pid_lock():
             os.kill(int(old_pid), 0)
             print(f"ERROR: Brain already running (PID {old_pid}). Stop it first.")
             sys.exit(1)
-        except (ValueError, OSError):
-            os.remove(_PID_FILE)  # stale lock
+        except (ValueError, OSError, SystemError):
+            os.remove(_PID_FILE)  # stale lock or Windows error
 
 def _write_pid_lock():
     with open(_PID_FILE, "w") as f:
