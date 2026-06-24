@@ -178,7 +178,7 @@ class ValisAgent:
         if record and record.discrepancy:
             await self.action_awareness.learn_from_discrepancy(self, record)
             logger.info(f"Agent {self.name} learned: {record.discrepancy}")
-        logger.debug(f"Agent {self.name} action result: {result.action} -> {'OK' if result.success else 'FAIL'}: {result.details}")
+        logger.info(f"Agent {self.name} action result: {result.action} -> {'OK' if result.success else 'FAIL'}: {result.details}")
         self._perception_event.set()  # Wake cognitive loop to process result
 
     async def cognitive_tick(self):
