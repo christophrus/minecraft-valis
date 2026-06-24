@@ -464,20 +464,40 @@ class ValisAgent:
                     return AgentAction(agent_name="", action="move_to",
                                        params={"x": ix, "y": iy, "z": iz})
             
-            # Priority 2: Wood nearby while exploring → stop and mine
+            # Priority 2: Wood/leaves nearby while exploring → stop and mine (or navigate closer)
             wood_nearby = [b for b in blocks if b.get("type","").upper() in 
                           ("OAK_LOG","BIRCH_LOG","SPRUCE_LOG","JUNGLE_LOG","ACACIA_LOG",
                            "DARK_OAK_LOG","CHERRY_LOG","MANGROVE_LOG")]
+            # If only leaves, navigate toward them (trees are there)
+            leaves_nearby = [b for b in blocks if b.get("type","").upper() in
+                            ("OAK_LEAVES","BIRCH_LEAVES","SPRUCE_LEAVES","JUNGLE_LEAVES",
+                             "ACACIA_LEAVES","DARK_OAK_LEAVES")]
             if wood_nearby and pos_key(wood_nearby[0]) not in self._recently_mined:
                 t = min(wood_nearby, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
                 self._nav_target = None
                 return AgentAction(agent_name="", action="mine_block",
                     params={"x": int(t.get("x",px)), "y": int(t.get("y",py-1)), "z": int(t.get("z",pz))})
+            if leaves_nearby and not wood_nearby:
+                t = min(leaves_nearby, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
+                logger.debug(f"FAST-PATH: leaves spotted at ({t.get('x')},{t.get('y')},{t.get('z')}), navigating closer")
+                self._nav_target = (t.get("x",px), t.get("y",py), t.get("z",pz))
+                self._nav_start = time.time()
+                return AgentAction(agent_name="", action="move_to",
+                    params={"x": int(t.get("x",px)), "y": int(t.get("y",py)), "z": int(t.get("z",pz))})
             
-            # Priority 3: Plan coordinates
+            # Priority 3: Plan coordinates (skip if forest nearby and we need wood)
+            nb = perception.nearby_biomes
+            has_wood = any(k in ("oak_log","birch_log","spruce_log","acacia_log","dark_oak_log") 
+                          for k in perception.inventory)
+            forest_nearby = False
+            if nb and not has_wood:
+                for d, b in nb.items():
+                    if "forest" in b or "taiga" in b or "jungle" in b or "grove" in b or "wood" in b:
+                        forest_nearby = True
+                        break
             plan_text = " ".join(self.planner.daily_plan)
             coords = re.findall(r'\((-?\d+),\s*(-?\d+),\s*(-?\d+)\)', plan_text)
-            if coords and random.random() < 0.7:
+            if coords and random.random() < 0.7 and not forest_nearby:
                 tx, ty, tz = map(int, random.choice(coords))
                 self._nav_target = (tx, ty, tz)
                 self._nav_start = time.time()
@@ -488,26 +508,26 @@ class ValisAgent:
             if not hasattr(self, '_explore_heading'):
                 self._explore_heading = None
                 self._explore_steps = 0
-            nb = perception.nearby_biomes
-            has_wood = any(k in ("oak_log","birch_log","spruce_log","acacia_log","dark_oak_log") 
-                          for k in perception.inventory)
-            if not has_wood and nb and self._explore_steps == 0:
+            # Forest lock: if forest/taiga nearby and no wood, head there and stay on course
+            if not has_wood and forest_nearby and self._explore_steps == 0:
                 forest_dirs = []
+                dir_map = {"north": (0, -1), "south": (0, 1), "east": (1, 0), "west": (-1, 0)}
                 for d, b in nb.items():
                     if "forest" in b or "taiga" in b or "jungle" in b or "grove" in b or "wood" in b:
-                        dir_map = {"north": (0, -1), "south": (0, 1), "east": (1, 0), "west": (-1, 0)}
                         if d in dir_map:
                             forest_dirs.append(dir_map[d])
                 if forest_dirs:
                     self._explore_heading = random.choice(forest_dirs)
+                    logger.debug(f"FAST-PATH: forest lock -> heading=({self._explore_heading[0]},{self._explore_heading[1]})")
             self._explore_steps += 1
-            if self._explore_steps > random.randint(8, 15):
+            # Don't reset explore heading if locked onto forest and still need wood
+            if self._explore_steps > random.randint(20 if forest_nearby else 8, 30 if forest_nearby else 15):
                 self._explore_heading = None
                 self._explore_steps = 0
             if self._explore_heading is None:
                 self._explore_heading = random.choice([(1, 0), (-1, 0), (0, 1), (0, -1)])
             dx, dz = self._explore_heading
-            dist = random.randint(15, 30)
+            dist = random.randint(30, 50) if forest_nearby else random.randint(15, 30)  # Go deeper into forest
             tx, ty, tz = px + dx * dist, py, pz + dz * dist
             logger.debug(f"FAST-PATH: MOVE=explore -> ({tx},{ty},{tz}) heading=({dx},{dz}) step={self._explore_steps} has_wood={has_wood}")
             self._nav_target = (tx, ty, tz)
@@ -586,7 +606,9 @@ class ValisAgent:
             wood_count = sum(1 for b in perception.nearby_blocks
                 if b.get("type","").upper() in
                 ("OAK_LOG","BIRCH_LOG","SPRUCE_LOG","JUNGLE_LOG","ACACIA_LOG",
-                 "DARK_OAK_LOG","CHERRY_LOG","MANGROVE_LOG"))
+                 "DARK_OAK_LOG","CHERRY_LOG","MANGROVE_LOG",
+                 "OAK_LEAVES","BIRCH_LEAVES","SPRUCE_LEAVES","JUNGLE_LEAVES",
+                 "ACACIA_LEAVES","DARK_OAK_LEAVES"))
             logger.debug(f"CTRL: wood_in_perception={wood_count} total_blocks={len(perception.nearby_blocks)}")
 
             # Step 2: Generate goals periodically
