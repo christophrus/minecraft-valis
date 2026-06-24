@@ -194,13 +194,29 @@ class ValisAgent:
                 tx, ty, tz = map(int, random.choice(coords))
                 return AgentAction(agent_name="", action="move_to",
                                    params={"x": tx, "y": ty, "z": tz})
-            # Systematic exploration: maintain heading instead of bouncing randomly
+            # Systematic exploration: bias toward forests if agent has no wood
             if not hasattr(self, '_explore_heading'):
-                self._explore_heading = random.choice([(1, 0), (-1, 0), (0, 1), (0, -1)])
+                self._explore_heading = None
                 self._explore_steps = 0
-            self._explore_steps += 1
-            if self._explore_steps > random.randint(5, 8):
+            # Pick heading biased toward forest biomes if agent needs wood
+            nb = perception.nearby_biomes
+            has_wood = any(k in ("oak_log","birch_log","spruce_log","acacia_log","dark_oak_log") 
+                          for k in perception.inventory)
+            if not has_wood and nb and self._explore_steps == 0:
+                forest_dirs = []
+                for d, b in nb.items():
+                    if "forest" in b or "taiga" in b or "jungle" in b or "grove" in b or "wood" in b:
+                        # Map direction to (dx, dz) heading
+                        dir_map = {"north": (0, -1), "south": (0, 1), "east": (1, 0), "west": (-1, 0)}
+                        if d in dir_map:
+                            forest_dirs.append(dir_map[d])
+                if forest_dirs:
+                    self._explore_heading = random.choice(forest_dirs)
+            if self._explore_heading is None:
                 self._explore_heading = random.choice([(1, 0), (-1, 0), (0, 1), (0, -1)])
+            self._explore_steps += 1
+            if self._explore_steps > random.randint(8, 15):
+                self._explore_heading = None
                 self._explore_steps = 0
             dx, dz = self._explore_heading
             dist = random.randint(15, 30)

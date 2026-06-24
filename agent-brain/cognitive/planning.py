@@ -55,8 +55,9 @@ Your current goals:
 
 Generate a daily plan for today as a list of 3-6 tasks you want to accomplish.
 Each task should be concrete and achievable with the blocks and resources you can see right now.
-Only include tasks that can be done using blocks currently visible in "Nearby blocks".
-If you don't see trees, don't plan to gather wood — instead explore to find them.
+IMPORTANT: Use the "Biomes in the distance" information to decide WHERE to explore.
+If you need wood and a forest is to the north, your first task should be "Travel north to find trees in the forest biome".
+Include exact block coordinates from "Nearby blocks" when possible.
 Format: one task per line, starting with a dash (-)."""
 
         response = await agent.llm.chat([
