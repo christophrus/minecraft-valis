@@ -64,6 +64,7 @@ public class ValisCommand implements CommandExecutor {
                 if (agent != null) {
                     agent.despawn();
                     sender.sendMessage("§6[Valis] §cAgent despawned: " + name);
+                    plugin.getWsBridge().sendToBrain("despawn_agent", name, null);
                 } else {
                     sender.sendMessage("§6[Valis] §7Agent not found: " + name);
                 }
