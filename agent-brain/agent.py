@@ -232,7 +232,7 @@ class ValisAgent:
             return
 
         real_inv = {k: v for k, v in perception.inventory.items() if k.lower() != "air"}
-        logger.info(f"Agent {self.name} tick {self.tick_count}: pos=({perception.position.get('x',0)},{perception.position.get('y',0)},{perception.position.get('z',0)}) inv={real_inv}")
+        logger.info(f"Agent {self.name} tick {self.tick_count}: pos=({perception.position.get('x',0)},{perception.position.get('y',0)},{perception.position.get('z',0)}) biome={perception.biome} inv={real_inv}")
 
         try:
             # Step 1: Run Cognitive Controller (PIANO bottleneck)
