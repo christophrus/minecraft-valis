@@ -167,10 +167,12 @@ class ValisAgent:
 
         if hint in ("mine", "place"):
             target = None
+            target_priority = 0  # 1=intent, 2=wood, 3=plan, 4=solid
             
             # Priority 1: LLM intent target (if valid and not recently mined)
             if intent_target and pos_key(intent_target) not in self._recently_mined:
                 target = intent_target
+                target_priority = 1
                 logger.debug(f"FAST-PATH: TARGET=intent -> {target.get('type','?')} at ({target.get('x')},{target.get('y')},{target.get('z')})")
             
             # Priority 2: Wood/log blocks nearby (only for mine, not place!)
@@ -181,6 +183,7 @@ class ValisAgent:
                 wood_blocks = [b for b in wood_blocks if pos_key(b) not in self._recently_mined]
                 if wood_blocks:
                     target = min(wood_blocks, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
+                    target_priority = 2
                     logger.debug(f"FAST-PATH: TARGET=wood_heuristic -> {target.get('type','?')} at ({target.get('x')},{target.get('y')},{target.get('z')})")
             
             # Priority 3: Plan coordinates
@@ -192,6 +195,7 @@ class ValisAgent:
                         for b in blocks:
                             if b.get("x",0)==int(pc[0]) and b.get("y",0)==int(pc[1]) and b.get("z",0)==int(pc[2]):
                                 target = b
+                                target_priority = 3
                                 break
                         if target: break
             
@@ -201,6 +205,7 @@ class ValisAgent:
                 solid_blocks = [b for b in solid_blocks if pos_key(b) not in self._recently_mined]
                 if solid_blocks:
                     target = min(solid_blocks, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
+                    target_priority = 4
                 else:
                     # Debug: what types ARE in perception?
                     sample_types = list(set(b.get("type","?") for b in blocks[:20]))
@@ -215,9 +220,13 @@ class ValisAgent:
                     tx, ty, tz = target.get("x", px), target.get("y", py - 1), target.get("z", pz)
                 
                 # If hint is "mine" but target is junk and we need wood → explore instead
+                # BUT: always respect LLM intent targets (priority 1)
                 has_wood = any(k in ("oak_log","birch_log","spruce_log","acacia_log","dark_oak_log","cherry_log") 
                               for k in perception.inventory)
-                if hint == "mine" and not has_wood and target_type in ("DIRT","GRASS_BLOCK","STONE","COBBLESTONE","SAND","GRAVEL","SHORT_GRASS","ANDESITE","DIORITE","GRANITE","TUFF","DEEPSLATE"):
+                junk_types = ("DIRT","GRASS_BLOCK","STONE","COBBLESTONE","SAND","GRAVEL","SHORT_GRASS",
+                              "ANDESITE","DIORITE","GRANITE","TUFF","DEEPSLATE")
+                if hint == "mine" and target_priority > 1 and not has_wood and target_type in junk_types:
+                    logger.debug(f"FAST-PATH: skipping junk target (priority={target_priority}, type={target_type}), fall to explore")
                     pass  # Fall through to move/explore
                 elif hint == "mine":
                     tkey = f"{int(tx)},{int(ty)},{int(tz)}"
@@ -225,8 +234,14 @@ class ValisAgent:
                         logger.debug(f"FAST-PATH: skip mine of recently placed block at ({int(tx)},{int(ty)},{int(tz)})")
                         pass
                     else:
-                        self._recently_mined[tkey] = now
-                        return AgentAction(agent_name="", action="mine_block", params={"x": int(tx), "y": int(ty), "z": int(tz)})
+                        import math
+                        dist_to_target = math.sqrt((px-tx)**2 + (py-ty)**2 + (pz-tz)**2)
+                        if dist_to_target > 4:
+                            logger.debug(f"FAST-PATH: mine target too far ({dist_to_target:.0f}m), navigate first")
+                            pass  # Fall through to move/explore → will navigate via intent_coords
+                        else:
+                            self._recently_mined[tkey] = now
+                            return AgentAction(agent_name="", action="mine_block", params={"x": int(tx), "y": int(ty), "z": int(tz)})
                 else:
                     inv = perception.inventory
                     place_mat = "dirt"
