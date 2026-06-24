@@ -148,11 +148,13 @@ class ValisAgent:
         """
         if not self._running:
             return
+        logger.debug(f"Tick entry {self.name} evt={self._perception_event.is_set()}")
 
         # Wait for perception data
         try:
             await asyncio.wait_for(self._perception_event.wait(), timeout=10.0)
         except asyncio.TimeoutError:
+            logger.debug(f"Agent {self.name}: waiting for perception (timeout)")
             return
         self._perception_event.clear()
 
@@ -160,6 +162,8 @@ class ValisAgent:
         perception = self._pending_perception
         if perception is None:
             return
+
+        logger.info(f"Agent {self.name} tick {self.tick_count}: processing perception at ({perception.position.get('x',0)},{perception.position.get('y',0)},{perception.position.get('z',0)})")
 
         try:
             # Step 1: Run Cognitive Controller (PIANO bottleneck)
@@ -179,6 +183,7 @@ class ValisAgent:
 
             # Step 4: Decide specific action
             action_str = await self.planner.decide_action(self)
+            logger.info(f"Agent {self.name} tick {self.tick_count}: LLM action = '{action_str}'")
             parsed = self.executor.parse_action(action_str)
 
             # Step 5: Execute action via bridge
@@ -198,6 +203,8 @@ class ValisAgent:
                 if decision.chat_hint and decision.action_hint == "socialize":
                     chat = AgentChat(agent_name=self.name, text=decision.chat_hint)
                     await self.bridge.send_chat(chat)
+            elif not parsed:
+                logger.warning(f"Agent {self.name}: could not parse action: '{action_str}'")
 
             # Step 6: Accumulate importance for reflection
             importance = decision.priority * 5  # Scale to roughly match threshold
@@ -263,10 +270,18 @@ class AgentManager:
             logger.info(f"Agent despawned: {name}")
 
     async def handle_perception(self, perception: PerceptionData):
-        """Route perception data to the correct agent."""
+        """Route perception data to the correct agent. Auto-creates agent if unknown."""
         agent = self.agents.get(perception.agent_name)
         if agent:
             agent.receive_perception(perception)
+            logger.debug(f"Perception delivered to {perception.agent_name} (tick {perception.tick})")
+        else:
+            # Auto-create agent from perception data (server already has the NPC)
+            logger.info(f"Auto-creating agent from perception: {perception.agent_name}")
+            await self.spawn_agent(perception.agent_name, "default")
+            agent = self.agents.get(perception.agent_name)
+            if agent:
+                agent.receive_perception(perception)
 
     async def handle_action_result(self, result: ActionResult):
         """Route action result to the correct agent."""
@@ -292,7 +307,10 @@ class AgentManager:
                 if agent._running
             ]
             if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for i, r in enumerate(results):
+                    if isinstance(r, Exception):
+                        logger.error(f"Agent tick error: {r}", exc_info=r)
 
             await asyncio.sleep(0.1)  # Small delay to prevent busy-loop
 

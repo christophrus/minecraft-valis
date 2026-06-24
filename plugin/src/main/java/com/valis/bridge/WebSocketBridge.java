@@ -90,6 +90,13 @@ public class WebSocketBridge extends WebSocketServer {
 
         // Run on main thread (Bukkit)
         plugin.getServer().getScheduler().runTask(plugin, () -> {
+            // Skip if agent already exists (e.g., spawned via command before brain connected)
+            if (plugin.getAgents().containsKey(name)) {
+                log.info("Agent already exists, skipping spawn: " + name);
+                sendToBrain("agent_spawned", name, null);
+                return;
+            }
+
             var world = plugin.getServer().getWorld(plugin.getValisConfig().getWorldName());
             if (world == null) {
                 log.severe("World not found: " + plugin.getValisConfig().getWorldName());

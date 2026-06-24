@@ -58,8 +58,15 @@ public class ValisCommand implements CommandExecutor {
                     return true;
                 }
                 String name = args[1];
-                plugin.getWsBridge().sendAgentDespawn(name);
-                sender.sendMessage("§6[Valis] §cDespawn request sent for agent: " + name);
+
+                // Despawn directly
+                var agent = plugin.getAgents().remove(name);
+                if (agent != null) {
+                    agent.despawn();
+                    sender.sendMessage("§6[Valis] §cAgent despawned: " + name);
+                } else {
+                    sender.sendMessage("§6[Valis] §7Agent not found: " + name);
+                }
             }
             case "list" -> {
                 var agents = plugin.getAgents();

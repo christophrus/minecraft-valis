@@ -71,11 +71,16 @@ class BridgeClient:
         """Route message to the appropriate handler."""
         match msg_type:
             case "perception":
-                perception = PerceptionData.from_json(data)
+                # Data is nested: outer has {type, agent_name, data: {tick, position,...}}
+                inner = data.get("data", data)
+                inner["agent_name"] = data.get("agent_name", inner.get("agent_name", ""))
+                perception = PerceptionData.from_json(inner)
                 await self.manager.handle_perception(perception)
 
             case "action_result":
-                result = ActionResult.from_json(data)
+                inner = data.get("data", data)
+                inner["agent_name"] = data.get("agent_name", inner.get("agent_name", ""))
+                result = ActionResult.from_json(inner)
                 await self.manager.handle_action_result(result)
 
             case "spawn_agent":
@@ -107,6 +112,7 @@ class BridgeClient:
             await self._ws.send(json.dumps(data))
 
     async def send_action(self, action: AgentAction):
+        logger.info(f"Sending action: {action.agent_name} -> {action.action} {action.params}")
         await self.send(action.to_json())
 
     async def send_chat(self, chat: AgentChat):

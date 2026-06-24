@@ -24,7 +24,7 @@ from agent import AgentManager
 
 logger = logging.getLogger("valis")
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
 
@@ -39,12 +39,13 @@ async def main():
 
     manager = AgentManager()
     bridge = BridgeClient(manager, ws_host, ws_port)
+    manager.set_bridge(bridge)
 
-    # Connect to Minecraft WebSocket
-    await bridge.connect()
-
-    # Start agent tick loop (runs cognitive cycles)
+    # Start agent tick loop FIRST (before blocking connect)
     tick_task = asyncio.create_task(manager.run_tick_loop())
+
+    # Connect to Minecraft WebSocket (this runs the message loop)
+    await bridge.connect()
 
     # Handle shutdown gracefully
     stop_event = asyncio.Event()

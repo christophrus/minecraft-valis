@@ -154,6 +154,7 @@ class DeepSeekProvider(OpenAIProvider):
 
     Models: deepseek-chat (V3), deepseek-reasoner (R1).
     Base URL: https://api.deepseek.com
+    Note: DeepSeek does not offer embeddings. Uses fallback.
     """
 
     def __init__(self, config: LLMConfig):
@@ -162,6 +163,10 @@ class DeepSeekProvider(OpenAIProvider):
         if not config.model:
             config.model = "deepseek-chat"
         super().__init__(config)
+
+    async def embed(self, text: str) -> list[float]:
+        """DeepSeek has no embeddings API. Use fallback hash-based embedding."""
+        return _fallback_embed(text)
 
 
 def _fallback_embed(text: str) -> list[float]:
