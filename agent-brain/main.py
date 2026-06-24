@@ -8,6 +8,7 @@ actions back to the Minecraft server.
 """
 
 import asyncio
+import atexit
 import logging
 import os
 import signal
@@ -15,6 +16,34 @@ import sys
 
 # Make agent-brain/ importable from any working directory
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# --- PID lock: prevent double starts ---
+_PID_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".brain.pid")
+
+def _check_pid_lock():
+    if os.path.exists(_PID_FILE):
+        with open(_PID_FILE) as f:
+            old_pid = f.read().strip()
+        try:
+            os.kill(int(old_pid), 0)
+            print(f"ERROR: Brain already running (PID {old_pid}). Stop it first.")
+            sys.exit(1)
+        except (ValueError, OSError):
+            os.remove(_PID_FILE)  # stale lock
+
+def _write_pid_lock():
+    with open(_PID_FILE, "w") as f:
+        f.write(str(os.getpid()))
+
+def _remove_pid_lock():
+    try:
+        os.remove(_PID_FILE)
+    except OSError:
+        pass
+
+_check_pid_lock()
+_write_pid_lock()
+atexit.register(_remove_pid_lock)
 
 from dotenv import load_dotenv
 load_dotenv()
