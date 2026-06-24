@@ -111,6 +111,10 @@ class ValisAgent:
         self._perception_event = asyncio.Event()
         self._running = False
 
+        # Action state
+        self._crafting_table_placed = False  # Prevent re-placing after successful placement
+        self._recently_crafted: dict[str, float] = {}  # Track recent crafts to avoid duplicate due to inv lag
+
         logger.info(f"Agent created: {self.name} ({self.personality}) [{self.agent_id}]")
 
     # --- Public API ---
@@ -152,17 +156,20 @@ class ValisAgent:
                 # Block not in perception, but still navigate there
                 intent_target = {"x": ix, "y": iy, "z": iz, "type": "UNKNOWN"}
 
-        # --- Recently mined / placed / failed-place tracking ---
+        # --- Recently mined / placed / failed-place / crafted tracking ---
         if not hasattr(self, '_recently_mined'):
             self._recently_mined: dict[str, float] = {}
         if not hasattr(self, '_recently_placed'):
             self._recently_placed: dict[str, float] = {}
         if not hasattr(self, '_recently_failed_place'):
             self._recently_failed_place: dict[str, float] = {}
+        if not hasattr(self, '_recently_crafted'):
+            self._recently_crafted: dict[str, float] = {}
         now = time.time()
         self._recently_mined = {k: v for k, v in self._recently_mined.items() if now - v < 5}
         self._recently_placed = {k: v for k, v in self._recently_placed.items() if now - v < 120}
         self._recently_failed_place = {k: v for k, v in self._recently_failed_place.items() if now - v < 10}
+        self._recently_crafted = {k: v for k, v in self._recently_crafted.items() if now - v < 15}
         def pos_key(b): return f"{b.get('x',0)},{b.get('y',0)},{b.get('z',0)}"
 
         # --- PRE-EMPTIVE CRAFTING CHECK ---
@@ -191,32 +198,41 @@ class ValisAgent:
         if total_logs >= 1 and total_planks < 4:
             best_log = _find_best(all_logs)
             plank_type = best_log.replace("_log", "_planks") if best_log else "oak_planks"
-            craft_action = AgentAction(agent_name="", action="craft", params={"item": plank_type})
-            logger.debug(f"FAST-PATH: pre-emptive CRAFT planks ({best_log}={inv.get(best_log,0)})")
+            if plank_type not in self._recently_crafted:
+                craft_action = AgentAction(agent_name="", action="craft", params={"item": plank_type})
+                logger.debug(f"FAST-PATH: pre-emptive CRAFT planks ({best_log}={inv.get(best_log,0)})")
         # Pickaxe BEFORE sticks — reserve 3 planks for pickaxe, only craft sticks from surplus
         elif total_sticks >= 2 and total_planks >= 3 and not has_pickaxe:
             pickaxe_type = "wooden_pickaxe"
             if inv.get("cobblestone", 0) >= 3:
                 pickaxe_type = "stone_pickaxe"
-            craft_action = AgentAction(agent_name="", action="craft", params={"item": pickaxe_type})
-            logger.debug(f"FAST-PATH: pre-emptive CRAFT {pickaxe_type} (sticks={total_sticks}, planks={total_planks})")
-        # Crafting table: when we have 4+ planks and no table yet
-        elif total_planks >= 4 and inv.get("crafting_table", 0) < 1:
-            craft_action = AgentAction(agent_name="", action="craft", params={"item": "crafting_table"})
-            logger.debug(f"FAST-PATH: pre-emptive CRAFT crafting_table (planks={total_planks})")
+            if pickaxe_type not in self._recently_crafted:
+                craft_action = AgentAction(agent_name="", action="craft", params={"item": pickaxe_type})
+                logger.debug(f"FAST-PATH: pre-emptive CRAFT {pickaxe_type} (sticks={total_sticks}, planks={total_planks})")
+        # Crafting table: when we have 4+ planks, no table in inventory, and none placed nearby
+        elif total_planks >= 4 and inv.get("crafting_table", 0) < 1 and not self._crafting_table_placed:
+            if "crafting_table" not in self._recently_crafted:
+                craft_action = AgentAction(agent_name="", action="craft", params={"item": "crafting_table"})
+                logger.debug(f"FAST-PATH: pre-emptive CRAFT crafting_table (planks={total_planks})")
         elif total_planks >= 5 and total_sticks < 4:
             # Only craft sticks if we have 5+ planks (leaving 3 for pickaxe)
-            craft_action = AgentAction(agent_name="", action="craft", params={"item": "stick"})
-            logger.debug(f"FAST-PATH: pre-emptive CRAFT sticks (planks={total_planks}, surplus={total_planks-3})")
+            if "stick" not in self._recently_crafted:
+                craft_action = AgentAction(agent_name="", action="craft", params={"item": "stick"})
+                logger.debug(f"FAST-PATH: pre-emptive CRAFT sticks (planks={total_planks}, surplus={total_planks-3})")
         
         if craft_action:
+            # Track crafted item to prevent duplicate crafts due to inventory lag
+            item = craft_action.params.get("item", "")
+            if item:
+                self._recently_crafted[item] = time.time()
             return craft_action
 
         # --- CRAFTING TABLE: place if we have one but none nearby ---
         has_crafting_table_inv = inv.get("crafting_table", 0) >= 1
-        has_crafting_table_nearby = any(
-            b.get("type", "").upper() == "CRAFTING_TABLE" and abs(b.get("x",0)-px) <= 3 and abs(b.get("z",0)-pz) <= 3
-            for b in blocks
+        has_crafting_table_nearby = (
+            self._crafting_table_placed or
+            any(b.get("type", "").upper() == "CRAFTING_TABLE" and abs(b.get("x",0)-px) <= 3 and abs(b.get("z",0)-pz) <= 3
+                for b in blocks)
         )
         if has_crafting_table_inv and not has_crafting_table_nearby:
             # Place crafting table at agent's feet+1
@@ -226,6 +242,7 @@ class ValisAgent:
                           and b.get("type","").upper() not in ("AIR","CAVE_AIR","VOID_AIR") for b in blocks)
             if not blocked:
                 logger.debug(f"FAST-PATH: placing crafting_table at ({tx},{ty},{tz})")
+                self._crafting_table_placed = True
                 return AgentAction(agent_name="", action="place_block",
                                    params={"block_type": "crafting_table", "x": tx, "y": ty, "z": tz})
 
@@ -737,6 +754,8 @@ class ValisAgent:
                 ppos = perception.position
                 if abs(ppos.get("x", 0)) <= 2 and abs(ppos.get("z", 0)) <= 2:
                     logger.warning(f"Agent {self.name} at spawn ({ppos.get('x')},{ppos.get('y')},{ppos.get('z')}) — possible pathfinder reset")
+                    self._crafting_table_placed = False
+                    self._recently_crafted.clear()
 
             # --- TRACK move_to execution ---
             if parsed and parsed.action == "move_to":

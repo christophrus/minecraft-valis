@@ -79,52 +79,24 @@ class CognitiveController:
                 f"  - {d}" for d in discrepancies
             )
 
-        prompt = f"""You control {agent.name}, an AI in Minecraft. Pick ONE action.
+        prompt = f"""You control {agent.name}, an AI in Minecraft. Pick ONE action. Be concise — output ONLY JSON, max 300 chars.
 
-RAW MATERIALS I CARRY: {inv_text}
+INVENTORY: {inv_text}
 
 PERCEPTION:
 {perception_text}
 
-GOALS:
-{goal_text}
-
+GOALS: {goal_text}
 SOCIAL: {social_text}
-
 {memory_text}
 {discrepancy_text}
 
-DECISION RULES — choose action_hint:
+action_hint choices: mine|craft|place|move|explore|hunt|socialize|rest
 
-mine  = Break a block to get resources. Use when: you see wood, stone, coal, iron, or need dirt for shelter. Include coordinates in intent like "Mine oak_log at (12,64,-8)".
+RECIPES (for reference): log→4 planks | 4 planks→crafting_table | 2 planks→4 sticks | 3 planks+2 sticks→wooden_pickaxe | 3 cobble+2 sticks→stone_pickaxe (needs crafting_table) | 8 cobble→furnace (needs crafting_table) | 6 planks→2 doors
 
-craft = Turn raw materials into items. Use when you carry materials for a needed tool/block AND don't have it yet. CRITICAL: if inventory has logs but no planks → CRAFT. If planks ≥4 and no crafting_table → CRAFT. If planks≥3 + sticks≥2 and no pickaxe → CRAFT. The basic chain (log→plank→stick→pickaxe) runs automatically — YOU decide complex crafts like crafting_table, furnace, stone tools, doors.
-
-CRAFTING RECIPES:
-- 1 log → 4 planks (any wood)
-- 4 planks → crafting_table (needed for 3×3 recipes!)
-- 2 planks → 4 sticks
-- 3 planks + 2 sticks → wooden_pickaxe
-- 3 planks + 2 sticks → wooden_axe
-- 2 planks + 1 stick → wooden_sword
-- 8 cobblestone → furnace (need crafting_table)
-- 3 cobblestone + 2 sticks → stone_pickaxe (need crafting_table)
-- 6 planks → 2 doors
-
-place = Put a block in the world. Use when: building shelter, placing crafting_table, or blocking yourself in at night.
-
-move  = Walk to coordinates or toward a biome/structure. Include coords if known.
-
-explore = Systematic exploration when you don't know what's around. Move further than 'move'.
-
-hunt = Attack nearby animals (sheep, cow, pig, chicken, rabbit) for food. Use when hungry or need wool/leather.
-
-socialize = Talk to nearby players/villagers.
-
-rest/idle = Do nothing (only when waiting or nothing useful to do).
-
-Output ONLY valid JSON:
-{{"intent": "what and where", "reason": "why", "priority": 0-10, "action_hint": "mine|craft|place|move|explore|hunt|socialize|rest", "chat_hint": "or empty"}}"""
+Output ONLY JSON:
+{{"intent": "what and where", "reason": "why (1 sentence)", "priority": 0-10, "action_hint": "mine|craft|...", "chat_hint": ""}}"""
 
         import json, re
         for attempt in range(2):
