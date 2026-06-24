@@ -173,9 +173,24 @@ class ValisAgent:
                     target = min(solid_blocks, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
             
             if target:
+                target_type = target.get("type", "").upper()
                 self._nav_target = None  # Not navigating, doing mine/place
                 tx, ty, tz = target.get("x", px), target.get("y", py - 1), target.get("z", pz)
-                if hint == "mine":
+                
+                # If hint is "mine" but target is just dirt/grass/stone, and we need wood, 
+                # and forest is nearby — fall through to move toward forest instead
+                has_wood = any(k in ("oak_log","birch_log","spruce_log","acacia_log","dark_oak_log","cherry_log") 
+                              for k in perception.inventory)
+                nb = perception.nearby_biomes
+                forest_dir = None
+                if nb:
+                    for d, b in nb.items():
+                        if "forest" in b or "taiga" in b or "grove" in b:
+                            forest_dir = d
+                            break
+                if hint == "mine" and not has_wood and forest_dir and target_type in ("DIRT","GRASS_BLOCK","STONE","COBBLESTONE","SAND","GRAVEL","SHORT_GRASS"):
+                    pass  # Fall through to move/explore block below
+                elif hint == "mine":
                     # Track position to avoid re-mining AIR on next tick
                     self._recently_mined[f"{int(tx)},{int(ty)},{int(tz)}"] = now
                     return AgentAction(agent_name="", action="mine_block", params={"x": int(tx), "y": int(ty), "z": int(tz)})
