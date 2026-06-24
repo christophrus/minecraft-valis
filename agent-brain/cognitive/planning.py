@@ -54,7 +54,9 @@ Your current goals:
 {chr(10).join(f'- {g}' for g in goals)}
 
 Generate a daily plan for today as a list of 3-6 tasks you want to accomplish.
-Each task should be concrete and achievable in Minecraft.
+Each task should be concrete and achievable with the blocks and resources you can see right now.
+Only include tasks that can be done using blocks currently visible in "Nearby blocks".
+If you don't see trees, don't plan to gather wood — instead explore to find them.
 Format: one task per line, starting with a dash (-)."""
 
         response = await agent.llm.chat([
@@ -124,13 +126,13 @@ Relevant memories:
 
 Available actions:
 - move_to(x, y, z): Walk to coordinates
-- mine_block(x, y, z): Mine the block at given position
+- mine_block(x, y, z): Mine the block at given position — use exact coordinates from "Nearby blocks" above!
 - place_block(block_type, x, y, z): Place a block
 - look_at(x, y, z): Look at a position
 - chat(message): Send a chat message
 - idle: Do nothing this tick
 
-Respond with exactly ONE action in format: action_name(param1=value1, param2=value2, ...)"""
+IMPORTANT: If your task involves gathering resources, use mine_block with the exact coordinates shown under "Nearby blocks". Do NOT guess coordinates — copy them from the perception data. If the block you need is not nearby, use move_to to explore.
 
         response = await agent.llm.chat([
             {"role": "system", "content": "You control a Minecraft agent. Output ONLY the action, nothing else."},
