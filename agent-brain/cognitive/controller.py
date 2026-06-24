@@ -71,6 +71,14 @@ class CognitiveController:
             for m in recent
         )
 
+        # Recent action failures — what NOT to repeat
+        discrepancies = agent.action_awareness.get_recent_discrepancies(n=5)
+        discrepancy_text = ""
+        if discrepancies:
+            discrepancy_text = "Recent failures to avoid:\n" + "\n".join(
+                f"  - {d}" for d in discrepancies
+            )
+
         prompt = f"""You are the cognitive controller for {agent.name}, an AI agent in Minecraft.
 
 Your job is to synthesize all inputs and produce ONE high-level decision.
@@ -90,6 +98,8 @@ Inventory: {inv_text}
 
 Recent memories:
 {memory_text}
+
+{discrepancy_text}
 ---
 
 Output a JSON object with these fields:
@@ -101,38 +111,50 @@ Output a JSON object with these fields:
 
 Output ONLY the JSON, nothing else."""
 
-        try:
-            response = await agent.llm.chat([
-                {"role": "system", "content": "You are a decision-making module. Output only JSON."},
-                {"role": "user", "content": prompt},
-            ])
+        import json, re
+        for attempt in range(2):
+            try:
+                response = await agent.llm.chat([
+                    {"role": "system", "content": "You are a decision-making module. Output only JSON."},
+                    {"role": "user", "content": prompt},
+                ])
 
-            import json
-            # Extract JSON from response (may be wrapped in markdown)
-            json_str = response.strip()
-            if json_str.startswith("```"):
-                json_str = json_str.split("\n", 1)[1]
-                if json_str.endswith("```"):
-                    json_str = json_str[:-3]
-            data = json.loads(json_str)
+                # Extract JSON from response (may be wrapped in markdown or have preamble)
+                json_str = response.strip()
+                # Remove markdown code fences
+                json_str = re.sub(r'^```(?:json)?\s*', '', json_str)
+                json_str = re.sub(r'\s*```$', '', json_str)
+                # Find JSON object boundaries
+                brace_start = json_str.find('{')
+                brace_end = json_str.rfind('}')
+                if brace_start >= 0 and brace_end > brace_start:
+                    json_str = json_str[brace_start:brace_end + 1]
+                if not json_str:
+                    raise ValueError("Empty response from LLM")
+                data = json.loads(json_str)
 
-            decision = ControllerDecision(
-                intent=data.get("intent", "Explore the area"),
-                reason=data.get("reason", "No specific reason"),
-                priority=float(data.get("priority", 5)) / 10.0,
-                social_context=social_text,
-                action_hint=data.get("action_hint", "explore"),
-                chat_hint=data.get("chat_hint", ""),
-            )
-        except Exception as e:
-            logger.warning(f"Controller decision failed, using fallback: {e}")
-            decision = ControllerDecision(
-                intent="Explore the area and gather resources",
-                reason="Default exploration behavior",
-                priority=0.5,
-                action_hint="explore",
-                chat_hint="",
-            )
+                decision = ControllerDecision(
+                    intent=data.get("intent", "Explore the area"),
+                    reason=data.get("reason", "No specific reason"),
+                    priority=float(data.get("priority", 5)) / 10.0,
+                    social_context=social_text,
+                    action_hint=data.get("action_hint", "explore"),
+                    chat_hint=data.get("chat_hint", ""),
+                )
+                break  # Success
+            except Exception as e:
+                if attempt == 0:
+                    logger.warning(f"Controller JSON parse failed (retrying): {e}")
+                    prompt += "\n\nIMPORTANT: Output ONLY valid JSON. No markdown, no explanation, just the JSON object."
+                else:
+                    logger.warning(f"Controller decision failed, using fallback: {e}")
+                    decision = ControllerDecision(
+                        intent="Explore the area and gather resources",
+                        reason="Default exploration behavior",
+                        priority=0.5,
+                        action_hint="explore",
+                        chat_hint="",
+                    )
 
         self.last_decision = decision
         self.decision_history.append(decision)

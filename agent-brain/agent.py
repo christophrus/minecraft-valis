@@ -229,7 +229,8 @@ class ValisAgent:
         if perception is None:
             return
 
-        logger.info(f"Agent {self.name} tick {self.tick_count}: pos=({perception.position.get('x',0)},{perception.position.get('y',0)},{perception.position.get('z',0)}) inv={perception.inventory}")
+        real_inv = {k: v for k, v in perception.inventory.items() if k.lower() != "air"}
+        logger.info(f"Agent {self.name} tick {self.tick_count}: pos=({perception.position.get('x',0)},{perception.position.get('y',0)},{perception.position.get('z',0)}) inv={real_inv}")
 
         try:
             # Step 1: Run Cognitive Controller (PIANO bottleneck)
@@ -254,6 +255,7 @@ class ValisAgent:
                     return
 
             # Step 4: Convert controller decision directly to action (fast path)
+            action_str = ""
             parsed = self._decision_to_action(decision, perception)
             if parsed is None:
                 # Fallback: LLM action decision for complex cases
@@ -261,6 +263,12 @@ class ValisAgent:
                 if not self._running:
                     return
                 parsed = self.executor.parse_action(action_str)
+
+            # Warn if agent position jumped to spawn (Citizens pathfinder bug)
+            if perception and parsed and parsed.action == "move_to":
+                ppos = perception.position
+                if abs(ppos.get("x", 0)) <= 2 and abs(ppos.get("z", 0)) <= 2:
+                    logger.warning(f"Agent {self.name} at spawn ({ppos.get('x')},{ppos.get('y')},{ppos.get('z')}) — possible pathfinder reset")
 
             logger.info(f"Agent {self.name} tick {self.tick_count}: {parsed.action} {parsed.params}")
 

@@ -73,9 +73,10 @@ class PerceptionProcessor:
                 entity_descs.append(f"{name} ({etype}) {dist:.1f}m away")
             lines.append(f"Nearby: {', '.join(entity_descs)}.")
 
-        # Inventory
-        if p.inventory:
-            inv_items = [f"{mat}: {count}" for mat, count in p.inventory.items()]
+        # Inventory (filter out AIR)
+        real_inv = {k: v for k, v in p.inventory.items() if k.lower() != "air"}
+        if real_inv:
+            inv_items = [f"{mat}: {count}" for mat, count in real_inv.items()]
             lines.append(f"Inventory: {', '.join(inv_items)}.")
         else:
             lines.append("Inventory: empty.")

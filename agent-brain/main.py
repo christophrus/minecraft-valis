@@ -79,7 +79,12 @@ async def main():
     tick_task = asyncio.create_task(manager.run_tick_loop())
 
     # Connect to Minecraft WebSocket (this runs the message loop)
-    await bridge.connect()
+    try:
+        await bridge.connect()
+    except asyncio.CancelledError:
+        logger.info("WebSocket connection cancelled")
+        tick_task.cancel()
+        return
 
     # Handle shutdown gracefully
     stop_event = asyncio.Event()
@@ -95,10 +100,17 @@ async def main():
         except NotImplementedError:
             pass  # Windows doesn't support add_signal_handler
 
-    await stop_event.wait()
-    tick_task.cancel()
-    await bridge.disconnect()
-    logger.info("Agent brain service stopped.")
+    try:
+        await stop_event.wait()
+    except asyncio.CancelledError:
+        pass
+    finally:
+        tick_task.cancel()
+        try:
+            await bridge.disconnect()
+        except Exception:
+            pass
+        logger.info("Agent brain service stopped.")
 
 
 if __name__ == "__main__":
