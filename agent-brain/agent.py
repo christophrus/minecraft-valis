@@ -206,9 +206,15 @@ class ValisAgent:
                         if placeable:
                             place_mat = max(placeable, key=placeable.get)
                     above_y = int(ty) + 1
-                    above_blocked = any(b.get("x",0)==int(tx) and b.get("y",0)==above_y and b.get("z",0)==int(tz) for b in blocks)
-                    if above_blocked:
-                        above_y = int(ty) + 2
+                    for dy in range(1, 4):
+                        test_y = int(ty) + dy
+                        blocked = any(b.get("x",0)==int(tx) and b.get("y",0)==test_y and b.get("z",0)==int(tz) for b in blocks)
+                        if not blocked:
+                            above_y = test_y
+                            break
+                    # If low on building mats but have wood — craft instead
+                    if place_mat == "dirt" and inv.get("oak_log", 0) >= 1:
+                        return None  # Let LLM decide to craft
                     return AgentAction(agent_name="", action="place_block",
                                        params={"block_type": place_mat, "x": int(tx), "y": above_y, "z": int(tz)})
             # No solid blocks nearby — fall through to move
