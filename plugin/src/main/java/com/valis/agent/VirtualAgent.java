@@ -9,9 +9,13 @@ import net.citizensnpcs.api.npc.NPC;
 import net.citizensnpcs.api.npc.NPCRegistry;
 import net.citizensnpcs.trait.SkinTrait;
 import org.bukkit.Location;
+import org.bukkit.Material;
 import org.bukkit.entity.EntityType;
+import org.bukkit.inventory.ItemStack;
 import org.bukkit.scheduler.BukkitTask;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.logging.Logger;
 
 /**
@@ -31,6 +35,7 @@ public class VirtualAgent {
     private final WorldObserver observer;
     private final ActionExecutor executor;
     private int tickCounter = 0;
+    private final Map<String, Integer> inventory = new HashMap<>();  // material_name -> count
 
     public VirtualAgent(ValisPlugin plugin, String name, String personality, Location spawn) {
         this.plugin = plugin;
@@ -89,4 +94,29 @@ public class VirtualAgent {
     }
     public WorldObserver getObserver() { return observer; }
     public int getTickCounter() { return tickCounter; }
+
+    // --- Inventory ---
+    public Map<String, Integer> getInventory() { return inventory; }
+
+    public void addToInventory(Material mat, int amount) {
+        String name = mat.name().toLowerCase();
+        inventory.merge(name, amount, Integer::sum);
+    }
+
+    public boolean removeFromInventory(String material, int amount) {
+        Integer current = inventory.get(material);
+        if (current == null || current < amount) return false;
+        int remaining = current - amount;
+        if (remaining <= 0) inventory.remove(material);
+        else inventory.put(material, remaining);
+        return true;
+    }
+
+    public JsonObject inventoryToJson() {
+        JsonObject json = new JsonObject();
+        for (var entry : inventory.entrySet()) {
+            json.addProperty(entry.getKey(), entry.getValue());
+        }
+        return json;
+    }
 }

@@ -104,6 +104,8 @@ class Executor:
                               "y": _parse_num(parts[2]), "z": _parse_num(parts[3])}
                 elif action_name in ("chat", "say", "speak", "talk"):
                     params = {"message": params_str}
+                elif action_name in ("craft",):
+                    params = {"item": parts[0].strip()}
 
         # Map action names to Minecraft actions
         action_map = {
@@ -129,6 +131,7 @@ class Executor:
             "idle": "idle",
             "wait": "idle",
             "do_nothing": "idle",
+            "craft": "craft",
         }
 
         mapped_action = action_map.get(action_name)

@@ -62,8 +62,8 @@ public class WorldObserver {
         report.add("nearby_entities", observeEntities(loc, world));
 
         // Agent state
-        report.addProperty("health", 20); // NPCs don't have health, use Citizens metadata
-        report.add("inventory", new JsonArray()); // TODO: track virtual inventory
+        report.addProperty("health", 20);
+        report.add("inventory", agent.inventoryToJson());
 
         return report;
     }

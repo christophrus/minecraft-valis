@@ -128,6 +128,7 @@ Available actions:
 - move_to(x, y, z): Walk to coordinates
 - mine_block(x, y, z): Mine the block at given position — use exact coordinates from "Nearby blocks" above!
 - place_block(block_type, x, y, z): Place a block
+- craft(item): Craft an item using inventory (e.g., oak_planks, stick, wooden_pickaxe, stone_pickaxe)
 - look_at(x, y, z): Look at a position
 - chat(message): Send a chat message
 - idle: Do nothing this tick

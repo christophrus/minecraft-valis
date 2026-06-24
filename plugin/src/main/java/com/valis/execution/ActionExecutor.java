@@ -9,6 +9,8 @@ import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.logging.Logger;
 
 /**
@@ -39,6 +41,7 @@ public class ActionExecutor {
                 case "move_to" -> moveTo(params);
                 case "mine_block" -> mineBlock(params);
                 case "place_block" -> placeBlock(params);
+                case "craft" -> craft(params);
                 case "look_at" -> lookAt(params);
                 case "chat" -> chat(params);
                 case "idle" -> idle();
@@ -91,7 +94,14 @@ public class ActionExecutor {
         }
 
         // Simulate block breaking: drop items, set to air
+        var drops = block.getDrops();
         block.breakNaturally();
+        for (var drop : drops) {
+            agent.addToInventory(drop.getType(), drop.getAmount());
+        }
+        if (drops.isEmpty() && block.getType().isBlock()) {
+            agent.addToInventory(block.getType(), 1);  // at least track the block itself
+        }
         plugin.getWsBridge().sendActionResult(agent.getAgentName(), "mine_block",
                 true, "mined " + block.getType().name() + " at " + x + "," + y + "," + z);
     }
@@ -124,6 +134,48 @@ public class ActionExecutor {
             plugin.getWsBridge().sendActionResult(agent.getAgentName(), "place_block",
                     false, "unknown block type: " + blockType);
         }
+    }
+
+    /**
+     * Simple crafting system. Converts raw materials to products.
+     * Recipes: wood -> planks(4), cobblestone -> stone_pickaxe(1, costs 3),
+     *          planks + sticks -> wooden_pickaxe(1, costs 3 planks + 2 sticks)
+     */
+    private static final Map<String, Map<String, Integer>> RECIPES = new HashMap<>();
+    static {{
+        // Result material name -> {ingredient_name: amount}
+        RECIPES.put("oak_planks", Map.of("oak_log", 1));
+        RECIPES.put("birch_planks", Map.of("birch_log", 1));
+        RECIPES.put("spruce_planks", Map.of("spruce_log", 1));
+        RECIPES.put("stick", Map.of("oak_planks", 2));
+        RECIPES.put("crafting_table", Map.of("oak_planks", 4));
+        RECIPES.put("wooden_pickaxe", Map.of("oak_planks", 3, "stick", 2));
+        RECIPES.put("stone_pickaxe", Map.of("cobblestone", 3, "stick", 2));
+        RECIPES.put("wooden_axe", Map.of("oak_planks", 3, "stick", 2));
+        RECIPES.put("stone_axe", Map.of("cobblestone", 3, "stick", 2));
+        RECIPES.put("wooden_sword", Map.of("oak_planks", 2, "stick", 1));
+        RECIPES.put("stone_sword", Map.of("cobblestone", 2, "stick", 1));
+    }}
+
+    private void craft(JsonObject params) {
+        String item = params.has("item") ? params.get("item").getAsString().toLowerCase() : "";
+        var recipe = RECIPES.get(item);
+        if (recipe == null) {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "craft",
+                    false, "unknown recipe: " + item + ". Known: " + String.join(", ", RECIPES.keySet()));
+            return;
+        }
+        for (var entry : recipe.entrySet()) {
+            if (!agent.removeFromInventory(entry.getKey(), entry.getValue())) {
+                plugin.getWsBridge().sendActionResult(agent.getAgentName(), "craft",
+                        false, "missing " + entry.getKey() + " (need " + entry.getValue() + ")");
+                return;
+            }
+        }
+        int count = item.equals("stick") ? 4 : 1;
+        agent.addToInventory(Material.valueOf(item.toUpperCase()), count);
+        plugin.getWsBridge().sendActionResult(agent.getAgentName(), "craft",
+                true, "crafted " + count + "x " + item);
     }
 
     /**

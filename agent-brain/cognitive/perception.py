@@ -73,6 +73,13 @@ class PerceptionProcessor:
                 entity_descs.append(f"{name} ({etype}) {dist:.1f}m away")
             lines.append(f"Nearby: {', '.join(entity_descs)}.")
 
+        # Inventory
+        if p.inventory:
+            inv_items = [f"{mat}: {count}" for mat, count in p.inventory.items()]
+            lines.append(f"Inventory: {', '.join(inv_items)}.")
+        else:
+            lines.append("Inventory: empty.")
+
         return "\n".join(lines)
 
     def get_surroundings_summary(self) -> dict[str, Any]:
