@@ -144,8 +144,13 @@ class ValisAgent:
                 if hint == "mine":
                     return AgentAction(agent_name="", action="mine_block", params={"x": int(tx), "y": int(ty), "z": int(tz)})
                 else:
+                    # Use most abundant block from inventory for placing
+                    inv = perception.inventory
+                    place_mat = "dirt"
+                    if inv:
+                        place_mat = max(inv, key=inv.get)
                     return AgentAction(agent_name="", action="place_block",
-                                       params={"block_type": "DIRT", "x": int(tx), "y": int(ty) + 1, "z": int(tz)})
+                                       params={"block_type": place_mat, "x": int(tx), "y": int(ty) + 1, "z": int(tz)})
             # No solid blocks nearby — fall through to move
 
         if hint == "craft":

@@ -128,6 +128,11 @@ public class ActionExecutor {
 
         try {
             Material mat = Material.valueOf(blockType.toUpperCase());
+            if (!agent.removeFromInventory(blockType, 1)) {
+                plugin.getWsBridge().sendActionResult(agent.getAgentName(), "place_block",
+                        false, "missing " + blockType + " in inventory");
+                return;
+            }
             block.setType(mat);
             plugin.getWsBridge().sendActionResult(agent.getAgentName(), "place_block",
                     true, "placed " + blockType + " at " + x + "," + y + "," + z);
