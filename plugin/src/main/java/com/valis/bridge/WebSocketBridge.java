@@ -62,6 +62,20 @@ public class WebSocketBridge extends WebSocketServer {
         log.info("WebSocket bridge listening on port " + getPort());
     }
 
+    public void sendPlayerChat(String playerName, String text) {
+        JsonObject msg = new JsonObject();
+        msg.addProperty("type", "player_chat");
+        msg.addProperty("player", playerName);
+        msg.addProperty("text", text);
+        send(msg);
+    }
+
+    private void send(JsonObject msg) {
+        if (brainConnection != null && brainConnection.isOpen()) {
+            brainConnection.send(gson.toJson(msg));
+        }
+    }
+
     // --- Message Handling ---
 
     private void handleMessage(String raw) {

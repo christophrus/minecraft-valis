@@ -101,6 +101,12 @@ class BridgeClient:
                 name = data.get("agent_name", "")
                 logger.info(f"Agent despawned confirmed: {name}")
 
+            case "player_chat":
+                player = data.get("player", "?")
+                text = data.get("text", "")
+                logger.info(f"[PLAYER] {player}: {text}")
+                await self.manager.handle_player_instruction(player, text)
+
             case "chat":
                 agent_name = data.get("agent_name", data.get("name", ""))
                 text = data.get("text", data.get("data", {}).get("text", ""))

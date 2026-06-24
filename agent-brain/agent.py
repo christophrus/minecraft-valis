@@ -355,6 +355,23 @@ class AgentManager:
         logger.info(f"Agent spawned: {name} ({personality}). Total agents: {len(self.agents)}")
         return agent
 
+    async def handle_player_instruction(self, player: str, text: str):
+        """Handle a chat instruction from a player — inject into all agents."""
+        logger.info(f"Player instruction from {player}: {text}")
+        for agent in self.agents.values():
+            if text not in agent.goals:
+                agent.goals.insert(0, f"[Player {player} says] {text}")
+                if len(agent.goals) > 8:
+                    agent.goals = agent.goals[:8]
+            await agent.memory.add_event(
+                content=f"[Instruction from {player}] {text}",
+                importance=0.95,
+                subject=player,
+                predicate="instructed",
+                object=text[:100],
+            )
+            agent._perception_event.set()
+
     async def despawn_agent(self, name: str):
         """Stop and remove an agent."""
         agent = self.agents.pop(name, None)

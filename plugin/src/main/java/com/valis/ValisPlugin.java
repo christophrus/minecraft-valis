@@ -3,6 +3,9 @@ package com.valis;
 import com.valis.agent.VirtualAgent;
 import com.valis.bridge.WebSocketBridge;
 import com.valis.config.ValisConfig;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.player.AsyncPlayerChatEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.Map;
@@ -52,6 +55,16 @@ public class ValisPlugin extends JavaPlugin {
 
         // Register commands
         getCommand("valis").setExecutor(new ValisCommand(this));
+
+        // Register chat listener — forward player messages to agent brain
+        getServer().getPluginManager().registerEvents(new Listener() {
+            @EventHandler
+            public void onChat(AsyncPlayerChatEvent event) {
+                if (wsBridge != null && wsBridge.isRunning()) {
+                    wsBridge.sendPlayerChat(event.getPlayer().getName(), event.getMessage());
+                }
+            }
+        }, this);
 
         log.info("Valis plugin enabled successfully.");
     }
