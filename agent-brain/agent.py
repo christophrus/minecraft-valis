@@ -165,6 +165,48 @@ class ValisAgent:
         self._recently_failed_place = {k: v for k, v in self._recently_failed_place.items() if now - v < 10}
         def pos_key(b): return f"{b.get('x',0)},{b.get('y',0)},{b.get('z',0)}"
 
+        # --- PRE-EMPTIVE CRAFTING CHECK ---
+        # If agent has materials that need processing, craft NOW regardless of controller hint.
+        # This prevents the agent from running around with logs/planks without ever crafting.
+        inv = perception.inventory
+        all_logs = ("oak_log","birch_log","spruce_log","jungle_log","acacia_log",
+                    "dark_oak_log","cherry_log","mangrove_log")
+        all_planks = ("oak_planks","birch_planks","spruce_planks","jungle_planks",
+                      "acacia_planks","dark_oak_planks","cherry_planks","mangrove_planks")
+        total_logs = sum(inv.get(lt, 0) for lt in all_logs)
+        total_planks = sum(inv.get(pt, 0) for pt in all_planks)
+        total_sticks = inv.get("stick", 0)
+        has_pickaxe = any("pickaxe" in k.lower() for k in inv)
+        
+        # Find the most abundant log/plank type for crafting
+        def _find_best(key_list):
+            best, best_count = None, 0
+            for k in key_list:
+                c = inv.get(k, 0)
+                if c > best_count:
+                    best, best_count = k, c
+            return best
+        
+        craft_action = None
+        if total_logs >= 1 and total_planks < 4:
+            best_log = _find_best(all_logs)
+            plank_type = best_log.replace("_log", "_planks") if best_log else "oak_planks"
+            craft_action = AgentAction(agent_name="", action="craft", params={"item": plank_type})
+            logger.debug(f"FAST-PATH: pre-emptive CRAFT planks ({best_log}={inv.get(best_log,0)})")
+        elif total_planks >= 2 and total_sticks < 4:
+            craft_action = AgentAction(agent_name="", action="craft", params={"item": "stick"})
+            logger.debug(f"FAST-PATH: pre-emptive CRAFT sticks (planks={total_planks})")
+        elif total_sticks >= 2 and total_planks >= 3 and not has_pickaxe:
+            # Determine which pickaxe to craft based on available material tier
+            pickaxe_type = "wooden_pickaxe"
+            if inv.get("cobblestone", 0) >= 3:
+                pickaxe_type = "stone_pickaxe"
+            craft_action = AgentAction(agent_name="", action="craft", params={"item": pickaxe_type})
+            logger.debug(f"FAST-PATH: pre-emptive CRAFT {pickaxe_type} (sticks={total_sticks}, planks={total_planks})")
+        
+        if craft_action:
+            return craft_action
+
         if hint in ("mine", "place"):
             target = None
             target_priority = 0  # 1=intent, 2=wood, 3=plan, 4=solid
@@ -473,18 +515,37 @@ class ValisAgent:
                 if parsed is None or parsed.action == "idle":
                     import random as _random
                     inv = perception.inventory
-                    # If we have logs but no planks → craft planks
-                    if inv.get("oak_log", 0) >= 1 and inv.get("oak_planks", 0) < 4:
-                        logger.debug(f"FALLBACK-HEURISTIC: crafting planks (log={inv.get('oak_log',0)} planks={inv.get('oak_planks',0)})")
-                        parsed = AgentAction(agent_name="", action="craft", params={"item": "oak_planks"})
-                    # If we have planks but no sticks → craft sticks
-                    elif inv.get("oak_planks", 0) >= 2 and inv.get("stick", 0) < 4:
-                        logger.debug(f"FALLBACK-HEURISTIC: crafting sticks")
+                    all_logs = ("oak_log","birch_log","spruce_log","jungle_log","acacia_log",
+                                "dark_oak_log","cherry_log","mangrove_log")
+                    all_planks = ("oak_planks","birch_planks","spruce_planks","jungle_planks",
+                                  "acacia_planks","dark_oak_planks","cherry_planks","mangrove_planks")
+                    total_logs = sum(inv.get(lt, 0) for lt in all_logs)
+                    total_planks = sum(inv.get(pt, 0) for pt in all_planks)
+                    total_sticks = inv.get("stick", 0)
+                    has_pickaxe = any("pickaxe" in k.lower() for k in inv)
+                    
+                    def _find_best(key_list):
+                        best, best_count = None, 0
+                        for k in key_list:
+                            c = inv.get(k, 0)
+                            if c > best_count:
+                                best, best_count = k, c
+                        return best
+                    
+                    if total_logs >= 1 and total_planks < 4:
+                        best_log = _find_best(all_logs)
+                        plank_type = best_log.replace("_log", "_planks") if best_log else "oak_planks"
+                        logger.debug(f"FALLBACK-HEURISTIC: crafting planks ({best_log}={inv.get(best_log,0)})")
+                        parsed = AgentAction(agent_name="", action="craft", params={"item": plank_type})
+                    elif total_planks >= 2 and total_sticks < 4:
+                        logger.debug(f"FALLBACK-HEURISTIC: crafting sticks (planks={total_planks})")
                         parsed = AgentAction(agent_name="", action="craft", params={"item": "stick"})
-                    # If we have sticks and planks but no pickaxe
-                    elif inv.get("stick", 0) >= 2 and inv.get("oak_planks", 0) >= 3 and not any("pickaxe" in k for k in inv):
-                        logger.debug(f"FALLBACK-HEURISTIC: crafting wooden_pickaxe")
-                        parsed = AgentAction(agent_name="", action="craft", params={"item": "wooden_pickaxe"})
+                    elif total_sticks >= 2 and total_planks >= 3 and not has_pickaxe:
+                        pickaxe_type = "wooden_pickaxe"
+                        if inv.get("cobblestone", 0) >= 3:
+                            pickaxe_type = "stone_pickaxe"
+                        logger.debug(f"FALLBACK-HEURISTIC: crafting {pickaxe_type}")
+                        parsed = AgentAction(agent_name="", action="craft", params={"item": pickaxe_type})
                     else:
                         logger.debug(f"FALLBACK-HEURISTIC: nothing to craft, staying idle")
 
