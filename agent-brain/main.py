@@ -62,6 +62,32 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("openai").setLevel(logging.WARNING)
 logging.getLogger("websockets").setLevel(logging.WARNING)
 
+# --- Debug session log file (DEBUG level, timestamped, valis-only) ---
+from datetime import datetime
+
+_debug_log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug_logs")
+os.makedirs(_debug_log_dir, exist_ok=True)
+_debug_log_path = os.path.join(
+    _debug_log_dir,
+    f"debug-session-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+)
+
+_debug_handler = logging.FileHandler(_debug_log_path, encoding="utf-8")
+_debug_handler.setLevel(logging.DEBUG)
+_debug_handler.setFormatter(logging.Formatter(
+    "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
+))
+
+class ValisDebugFilter(logging.Filter):
+    """Only let valis.* loggers through to debug file."""
+    def filter(self, record):
+        return record.name.startswith("valis")
+
+_debug_handler.addFilter(ValisDebugFilter())
+logging.getLogger().addHandler(_debug_handler)
+
+logger.info(f"Debug session log: {_debug_log_path}")
+
 
 async def main():
     """Main entry point. Connects to Minecraft server and starts agent loop."""

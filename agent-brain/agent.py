@@ -165,6 +165,7 @@ class ValisAgent:
             # Priority 1: LLM intent target (if valid and not recently mined)
             if intent_target and pos_key(intent_target) not in self._recently_mined:
                 target = intent_target
+                logger.debug(f"FAST-PATH: TARGET=intent -> {target.get('type','?')} at ({target.get('x')},{target.get('y')},{target.get('z')})")
             
             # Priority 2: Wood/log blocks nearby
             if target is None:
@@ -174,6 +175,7 @@ class ValisAgent:
                 wood_blocks = [b for b in wood_blocks if pos_key(b) not in self._recently_mined]
                 if wood_blocks:
                     target = min(wood_blocks, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
+                    logger.debug(f"FAST-PATH: TARGET=wood_heuristic -> {target.get('type','?')} at ({target.get('x')},{target.get('y')},{target.get('z')})")
             
             # Priority 3: Plan coordinates
             if target is None:
@@ -229,8 +231,10 @@ class ValisAgent:
                     return AgentAction(agent_name="", action="place_block",
                                        params={"block_type": place_mat, "x": int(tx), "y": above_y, "z": int(tz)})
             # No target found, fall through to move
+            logger.debug(f"FAST-PATH: no target in mine/place, falling to explore")
 
         if hint == "craft":
+            logger.debug(f"FAST-PATH: craft hint -> returning None for LLM fallback")
             return None  # Let LLM decide
 
         if hint in ("move", "explore", "mine", "place"):
@@ -241,6 +245,7 @@ class ValisAgent:
                 dist = math.sqrt((px - tx)**2 + (py - ty)**2 + (pz - tz)**2)
                 elapsed = time.time() - getattr(self, '_nav_start', 0)
                 if dist > 3 and elapsed < 8:
+                    logger.debug(f"FAST-PATH: waiting for nav, dist={dist:.1f} elapsed={elapsed:.1f}s")
                     return None
                 self._nav_target = None
             
@@ -249,6 +254,7 @@ class ValisAgent:
                 ix, iy, iz = int(intent_coords[0][0]), int(intent_coords[0][1]), int(intent_coords[0][2])
                 dist_to_intent = math.sqrt((px-ix)**2 + (py-iy)**2 + (pz-iz)**2)
                 if dist_to_intent > 3:  # Not already there
+                    logger.debug(f"FAST-PATH: MOVE=intent -> ({ix},{iy},{iz}) dist={dist_to_intent:.0f}")
                     self._nav_target = (ix, iy, iz)
                     self._nav_start = time.time()
                     return AgentAction(agent_name="", action="move_to",
@@ -299,6 +305,7 @@ class ValisAgent:
             dx, dz = self._explore_heading
             dist = random.randint(15, 30)
             tx, ty, tz = px + dx * dist, py, pz + dz * dist
+            logger.debug(f"FAST-PATH: MOVE=explore -> ({tx},{ty},{tz}) heading=({dx},{dz}) step={self._explore_steps} has_wood={has_wood}")
             self._nav_target = (tx, ty, tz)
             self._nav_start = time.time()
             return AgentAction(agent_name="", action="move_to",
@@ -363,6 +370,21 @@ class ValisAgent:
             if not self._running:
                 return
 
+            # --- DEBUG: Controller output ---
+            import re as _re
+            logger.debug(f"CTRL: hint={decision.action_hint} priority={decision.priority:.2f}")
+            logger.debug(f"CTRL: intent='{decision.intent[:200]}'")
+            logger.debug(f"CTRL: reason='{decision.reason[:200]}'")
+            _ic = _re.findall(r'\((-?\d+),\s*(-?\d+),\s*(-?\d+)\)', decision.intent)
+            logger.debug(f"CTRL: intent_coords={_ic if _ic else 'NONE'}")
+            nb = perception.nearby_biomes
+            logger.debug(f"CTRL: nearby_biomes={dict(nb) if nb else 'NONE'}")
+            wood_count = sum(1 for b in perception.nearby_blocks
+                if b.get("type","").upper() in
+                ("OAK_LOG","BIRCH_LOG","SPRUCE_LOG","JUNGLE_LOG","ACACIA_LOG",
+                 "DARK_OAK_LOG","CHERRY_LOG","MANGROVE_LOG"))
+            logger.debug(f"CTRL: wood_in_perception={wood_count} total_blocks={len(perception.nearby_blocks)}")
+
             # Step 2: Generate goals periodically
             if self.tick_count % 30 == 0:
                 await self.goal_generator.generate_goals(
@@ -384,7 +406,9 @@ class ValisAgent:
             parsed = self._decision_to_action(decision, perception)
             if parsed is None:
                 # Fallback: LLM action decision for complex cases
+                logger.debug(f"FALLBACK: fast-path returned None, calling planner.decide_action()...")
                 action_str = await self.planner.decide_action(self)
+                logger.debug(f"FALLBACK: LLM returned '{action_str[:200]}'")
                 if not self._running:
                     return
                 parsed = self.executor.parse_action(action_str)
