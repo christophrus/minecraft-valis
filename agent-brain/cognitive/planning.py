@@ -95,11 +95,15 @@ Format: one task per line, starting with a dash (-)."""
         query = f"What should I do now? Current task: {self.current_task}. {context}"
         memories = await agent.retrieval.retrieve(query, limit=5)
 
-        # Relevant memories
+        # Relevant memories (trimmed for speed)
         memory_text = "\n".join(
-            f"- [{m.created.strftime('%H:%M')}] {m.content}"
+            f"- [{m.created.strftime('%H:%M')}] {m.content[:100]}"
             for m in memories
         )
+
+        # Inventory for crafting decisions
+        inv = agent._pending_perception.inventory if agent._pending_perception else {}
+        inv_text = ", ".join(f"{k}: {v}" for k, v in inv.items()) if inv else "empty"
 
         # Recent action failures — what NOT to repeat
         discrepancies = agent.action_awareness.get_recent_discrepancies(n=3)
@@ -118,6 +122,8 @@ Your daily plan:
 {chr(10).join(f'- {t}' for t in self.daily_plan)}
 
 Current task: {self.current_task}
+
+Inventory: {inv_text}
 
 Relevant memories:
 {memory_text}

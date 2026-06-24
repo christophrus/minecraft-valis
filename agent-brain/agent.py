@@ -159,15 +159,8 @@ class ValisAgent:
             # No solid blocks nearby — fall through to move
 
         if hint == "craft":
-            # Pick a craftable item based on inventory
-            inv = perception.inventory
-            if inv.get("oak_log", 0) >= 1:
-                return AgentAction(agent_name="", action="craft", params={"item": "oak_planks"})
-            if inv.get("cobblestone", 0) >= 3:
-                return AgentAction(agent_name="", action="craft", params={"item": "stone_pickaxe"})
-            if inv.get("oak_planks", 0) >= 3:
-                return AgentAction(agent_name="", action="craft", params={"item": "wooden_pickaxe"})
-            # Nothing craftable — fall through to move
+            # Let LLM decide (DeepSeek knows Minecraft recipes)
+            return None
 
         if hint in ("move", "explore", "mine", "place"):
             # Try to move towards a target from the daily plan
