@@ -60,7 +60,7 @@ public class ActionExecutor {
     }
 
     /**
-     * Teleport the NPC to a target position.
+     * Navigate the NPC to a target, falling back to teleport if pathfinding fails.
      */
     private void moveTo(JsonObject params) {
         int x = (int) params.get("x").getAsDouble();
@@ -69,11 +69,10 @@ public class ActionExecutor {
 
         NPC npc = agent.getNpc();
         if (npc != null && npc.isSpawned()) {
-            Location target = new Location(npc.getStoredLocation().getWorld(), x + 0.5, y, z + 0.5);
-            // Find safe ground (non-air, non-water, non-lava)
+            Location current = npc.getStoredLocation();
+            Location target = new Location(current.getWorld(), x + 0.5, y, z + 0.5);
+            // Find safe ground
             World world = target.getWorld();
-            Block ground = world.getBlockAt(x, y, z);
-            // If target is water/lava/air, scan down for solid ground
             for (int dy = 0; dy < 10; dy++) {
                 Block check = world.getBlockAt(x, y - dy, z);
                 if (check.getType().isSolid() && check.getType() != Material.WATER && check.getType() != Material.LAVA) {
@@ -81,9 +80,18 @@ public class ActionExecutor {
                     break;
                 }
             }
-            npc.teleport(target, PlayerTeleportEvent.TeleportCause.PLUGIN);
-            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "move_to",
-                    true, "teleported to " + x + "," + target.getBlockY() + "," + z);
+            // Try pathfinding first (with water enabled)
+            try {
+                npc.getNavigator().getLocalParameters().avoidWater(false);
+                npc.getNavigator().setTarget(target);
+                plugin.getWsBridge().sendActionResult(agent.getAgentName(), "move_to",
+                        true, "navigating to " + x + "," + target.getBlockY() + "," + z);
+            } catch (Exception e) {
+                // Fallback: teleport
+                npc.teleport(target, PlayerTeleportEvent.TeleportCause.PLUGIN);
+                plugin.getWsBridge().sendActionResult(agent.getAgentName(), "move_to",
+                        true, "teleported to " + x + "," + target.getBlockY() + "," + z);
+            }
         }
     }
 
