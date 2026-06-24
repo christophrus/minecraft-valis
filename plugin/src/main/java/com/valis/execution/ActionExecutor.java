@@ -3,7 +3,6 @@ package com.valis.execution;
 import com.comphenix.protocol.PacketType;
 import com.comphenix.protocol.ProtocolLibrary;
 import com.comphenix.protocol.events.PacketContainer;
-import com.comphenix.protocol.wrappers.BlockPosition;
 import com.google.gson.JsonObject;
 import com.valis.ValisPlugin;
 import com.valis.agent.VirtualAgent;
@@ -161,7 +160,6 @@ public class ActionExecutor {
 
         // Use NPC entity ID as the "breaker" entity for the animation
         int entityId = agent.getNpc().getEntity().getEntityId();
-        BlockPosition pos = new BlockPosition(x, y, z);
         var matName = block.getType().name();
 
         // Play block-breaking animation stages 0-9 over ~1.1 seconds
@@ -190,10 +188,15 @@ public class ActionExecutor {
                 try {
                     PacketContainer packet = ProtocolLibrary.getProtocolManager()
                             .createPacket(PacketType.Play.Server.BLOCK_BREAK_ANIMATION);
-                    packet.getIntegers().write(0, entityId);
-                    packet.getBlockPositionModifier().write(0, pos);
-                    // destroyStage is a byte field — write via getBytes() not getIntegers()
-                    packet.getBytes().write(0, (byte) stage);
+                    // In 1.21.x protocol: entityId(VarInt), location(packed long), destroyStage(byte)
+                    // ProtocolLib typed accessors may not map correctly for newer versions,
+                    // so use the generic getModifier() which exposes all fields directly.
+                    long packedPos = ((long)(x & 0x3FFFFFF) << 38)
+                                   | ((long)(z & 0x3FFFFFF) << 12)
+                                   | (long)(y & 0xFFF);
+                    packet.getModifier().write(0, entityId);
+                    packet.getModifier().write(1, packedPos);
+                    packet.getModifier().write(2, (byte) stage);
 
                     for (var player : world.getPlayers()) {
                         if (player.getLocation().distanceSquared(
