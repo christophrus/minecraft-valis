@@ -205,9 +205,15 @@ class ValisAgent:
             if hasattr(self, '_nav_target') and self._nav_target:
                 tx, ty, tz = self._nav_target
                 dist = math.sqrt((px - tx)**2 + (py - ty)**2 + (pz - tz)**2)
-                if dist > 3:  # Still navigating, let NPC finish
+                # Track idle streak to detect stuck navigation
+                if not hasattr(self, '_nav_idle_count'):
+                    self._nav_idle_count = 0
+                if dist > 5 and self._nav_idle_count < 4:
+                    self._nav_idle_count += 1
                     return AgentAction(agent_name="", action="idle")
+                # Arrived or timed out — clear nav state
                 self._nav_target = None
+                self._nav_idle_count = 0
             
             # Try to move towards a target from the daily plan
             plan_text = " ".join(self.planner.daily_plan)
