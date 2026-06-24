@@ -57,6 +57,11 @@ class Executor:
         if len(self.action_history) > 100:
             self.action_history = self.action_history[-100:]
 
+        # Handle empty or invalid responses
+        if not action_str:
+            logger.debug("Empty action string, defaulting to idle")
+            return AgentAction(agent_name="", action="idle")
+
         # Match function-style actions: action_name(key=value, key=value, ...)
         match = re.match(r"(\w+)\((.*)\)", action_str)
         if not match:

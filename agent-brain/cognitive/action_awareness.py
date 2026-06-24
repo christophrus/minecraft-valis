@@ -69,11 +69,6 @@ class ActionAwareness:
         if not success:
             discrepancy = f"Action '{expected.action}' failed: {details}"
             self.error_count += 1
-        elif expected.expected_result.lower() not in details.lower():
-            discrepancy = (
-                f"Action '{expected.action}' succeeded but result was unexpected. "
-                f"Expected: {expected.expected_result}. Got: {details}"
-            )
         else:
             self.success_count += 1
 
