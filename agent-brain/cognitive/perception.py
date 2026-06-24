@@ -61,10 +61,25 @@ class PerceptionProcessor:
             hints = ", ".join(f"{d}: {b}" for d, b in p.nearby_biomes.items())
             lines.append(f"Biomes in the distance: {hints}.")
 
-        # Nearby blocks (with positions so agent knows WHERE to act)
+        # Nearby blocks — send many, prioritize wood/ores/crafting materials
         if p.nearby_blocks:
+            # Prioritize: wood/logs first, then ores, then everything else
+            wood_keywords = ("_LOG", "_WOOD", "_PLANKS")
+            ore_keywords = ("COAL", "IRON", "GOLD", "DIAMOND", "COPPER", "EMERALD", "REDSTONE", "LAPIS")
+            priority = []
+            rest = []
+            for b in p.nearby_blocks:
+                btype = str(b.get("type", "")).upper()
+                if any(k in btype for k in wood_keywords):
+                    priority.append(b)
+                elif any(k in btype for k in ore_keywords):
+                    priority.append(b)
+                else:
+                    rest.append(b)
+            # Wood/ores first, then fill up to 40 with rest
+            sorted_blocks = priority + rest
             block_descs = []
-            for b in p.nearby_blocks[:10]:
+            for b in sorted_blocks[:40]:
                 btype = b.get("type", "?")
                 bx, by, bz = b.get("x", 0), b.get("y", 0), b.get("z", 0)
                 block_descs.append(f"{btype}({bx},{by},{bz})")

@@ -128,45 +128,67 @@ class ValisAgent:
         logger.info(f"Agent {self.name} stopped.")
 
     def _decision_to_action(self, decision, perception: PerceptionData) -> AgentAction | None:
-        """Convert controller decision directly to an action using perception data.
-        Returns None if LLM fallback is needed (complex actions like chat/craft)."""
+        """Convert controller decision to an action.
+        Priority: 1) LLM intent coordinates, 2) Perception heuristics, 3) None (LLM fallback)."""
+        import random, re, time
+        
         hint = decision.action_hint.lower()
+        intent = decision.intent  # LLM's detailed instruction with coordinates
         pos = perception.position
         px, py, pz = int(pos.get("x", 0)), int(pos.get("y", 0)), int(pos.get("z", 0))
         blocks = perception.nearby_blocks
 
+        # --- Extract coordinates from LLM intent (e.g. "Mine oak_log at (125,64,-30)") ---
+        intent_coords = re.findall(r'\((-?\d+),\s*(-?\d+),\s*(-?\d+)\)', intent)
+        intent_target = None
+        if intent_coords:
+            ix, iy, iz = int(intent_coords[0][0]), int(intent_coords[0][1]), int(intent_coords[0][2])
+            # Find matching nearby block
+            for b in blocks:
+                if b.get("x",0)==ix and b.get("y",0)==iy and b.get("z",0)==iz:
+                    intent_target = b
+                    break
+            if not intent_target:
+                # Block not in perception, but still navigate there
+                intent_target = {"x": ix, "y": iy, "z": iz, "type": "UNKNOWN"}
+
+        # --- Recently mined tracking ---
+        if not hasattr(self, '_recently_mined'):
+            self._recently_mined: dict[str, float] = {}
+        now = time.time()
+        self._recently_mined = {k: v for k, v in self._recently_mined.items() if now - v < 5}
+        def pos_key(b): return f"{b.get('x',0)},{b.get('y',0)},{b.get('z',0)}"
+
         if hint in ("mine", "place"):
-            import random, re, time
-            # Track recently mined positions to avoid re-mining AIR
-            if not hasattr(self, '_recently_mined'):
-                self._recently_mined: dict[str, float] = {}
-            now = time.time()
-            # Clean expired entries (older than 5 seconds)
-            self._recently_mined = {k: v for k, v in self._recently_mined.items() if now - v < 5}
-            
-            # Priority mine targets: wood/log blocks first, then plan coordinates, then nearest
-            wood_blocks = [b for b in blocks if b.get("type", "").upper() in 
-                          ("OAK_LOG", "BIRCH_LOG", "SPRUCE_LOG", "JUNGLE_LOG", "ACACIA_LOG", 
-                           "DARK_OAK_LOG", "CHERRY_LOG", "MANGROVE_LOG", "OAK_WOOD", "BIRCH_WOOD",
-                           "OAK_LEAVES", "BIRCH_LEAVES", "SPRUCE_LEAVES", "JUNGLE_LEAVES")]
-            # Also check plan for specific coordinates
-            plan_text = " ".join(self.planner.daily_plan)
-            plan_coords = re.findall(r'\((-?\d+),\s*(-?\d+),\s*(-?\d+)\)', plan_text)
-            plan_targets = []
-            if plan_coords:
-                for pc in plan_coords:
-                    plan_targets.extend([b for b in blocks 
-                        if b.get("x",0) == int(pc[0]) and b.get("y",0) == int(pc[1]) and b.get("z",0) == int(pc[2])])
-            
             target = None
-            # Filter out recently mined positions
-            def pos_key(b): return f"{b.get('x',0)},{b.get('y',0)},{b.get('z',0)}"
-            wood_blocks = [b for b in wood_blocks if pos_key(b) not in self._recently_mined]
-            if wood_blocks:
-                target = min(wood_blocks, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
-            elif plan_targets:
-                target = random.choice(plan_targets)
-            else:
+            
+            # Priority 1: LLM intent target (if valid and not recently mined)
+            if intent_target and pos_key(intent_target) not in self._recently_mined:
+                target = intent_target
+            
+            # Priority 2: Wood/log blocks nearby
+            if target is None:
+                wood_blocks = [b for b in blocks if b.get("type", "").upper() in 
+                              ("OAK_LOG", "BIRCH_LOG", "SPRUCE_LOG", "JUNGLE_LOG", "ACACIA_LOG", 
+                               "DARK_OAK_LOG", "CHERRY_LOG", "MANGROVE_LOG", "OAK_WOOD", "BIRCH_WOOD")]
+                wood_blocks = [b for b in wood_blocks if pos_key(b) not in self._recently_mined]
+                if wood_blocks:
+                    target = min(wood_blocks, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
+            
+            # Priority 3: Plan coordinates
+            if target is None:
+                plan_text = " ".join(self.planner.daily_plan)
+                plan_coords = re.findall(r'\((-?\d+),\s*(-?\d+),\s*(-?\d+)\)', plan_text)
+                if plan_coords:
+                    for pc in plan_coords:
+                        for b in blocks:
+                            if b.get("x",0)==int(pc[0]) and b.get("y",0)==int(pc[1]) and b.get("z",0)==int(pc[2]):
+                                target = b
+                                break
+                        if target: break
+            
+            # Priority 4: Nearest solid block (fallback)
+            if target is None:
                 solid_blocks = [b for b in blocks if b.get("type", "AIR") not in ("AIR", "CAVE_AIR", "VOID_AIR", "WATER", "LAVA")]
                 solid_blocks = [b for b in solid_blocks if pos_key(b) not in self._recently_mined]
                 if solid_blocks:
@@ -176,21 +198,18 @@ class ValisAgent:
                 target_type = target.get("type", "").upper()
                 tx, ty, tz = target.get("x", px), target.get("y", py - 1), target.get("z", pz)
                 
-                # If hint is "mine" but target is just dirt/grass/stone, and we need wood,
-                # fall through to move/explore — don't waste time mining junk
+                # If hint is "mine" but target is junk and we need wood → explore instead
                 has_wood = any(k in ("oak_log","birch_log","spruce_log","acacia_log","dark_oak_log","cherry_log") 
                               for k in perception.inventory)
                 if hint == "mine" and not has_wood and target_type in ("DIRT","GRASS_BLOCK","STONE","COBBLESTONE","SAND","GRAVEL","SHORT_GRASS","ANDESITE","DIORITE","GRANITE","TUFF","DEEPSLATE"):
-                    pass  # Fall through to move/explore block below
+                    pass  # Fall through to move/explore
                 elif hint == "mine":
-                    # Track position to avoid re-mining AIR on next tick
                     self._recently_mined[f"{int(tx)},{int(ty)},{int(tz)}"] = now
                     return AgentAction(agent_name="", action="mine_block", params={"x": int(tx), "y": int(ty), "z": int(tz)})
                 else:
                     inv = perception.inventory
                     place_mat = "dirt"
                     if inv:
-                        # Prefer most abundant, filtering non-placeables and raw materials
                         placeable = {k:v for k,v in inv.items() 
                             if k.lower() not in ("air", "wheat_seeds", "cornflower",
                             "oak_log", "spruce_log", "birch_log", "jungle_log", "acacia_log",
@@ -205,39 +224,47 @@ class ValisAgent:
                         if not blocked:
                             above_y = test_y
                             break
-                    # If low on building mats but have wood — craft instead
                     if place_mat == "dirt" and inv.get("oak_log", 0) >= 1:
                         return None  # Let LLM decide to craft
                     return AgentAction(agent_name="", action="place_block",
                                        params={"block_type": place_mat, "x": int(tx), "y": above_y, "z": int(tz)})
-            # No solid blocks nearby — fall through to move
+            # No target found, fall through to move
 
         if hint == "craft":
-            # Let LLM decide (DeepSeek knows Minecraft recipes)
-            return None
+            return None  # Let LLM decide
 
         if hint in ("move", "explore", "mine", "place"):
-            import random, re, math, time
-            # Don't interrupt ongoing navigation — wait for arrival or timeout
+            import math
+            # Don't interrupt ongoing navigation
             if hasattr(self, '_nav_target') and self._nav_target:
                 tx, ty, tz = self._nav_target
                 dist = math.sqrt((px - tx)**2 + (py - ty)**2 + (pz - tz)**2)
                 elapsed = time.time() - getattr(self, '_nav_start', 0)
-                if dist > 3 and elapsed < 8:  # Still navigating, let NPC walk
-                    return None  # Fall through to idle (don't cancel navigation)
-                self._nav_target = None  # Arrived or timed out
+                if dist > 3 and elapsed < 8:
+                    return None
+                self._nav_target = None
             
-            # While exploring, if wood/trees are nearby — stop and mine them!
+            # Priority 1: Use LLM intent coordinates for navigation
+            if intent_coords:
+                ix, iy, iz = int(intent_coords[0][0]), int(intent_coords[0][1]), int(intent_coords[0][2])
+                dist_to_intent = math.sqrt((px-ix)**2 + (py-iy)**2 + (pz-iz)**2)
+                if dist_to_intent > 3:  # Not already there
+                    self._nav_target = (ix, iy, iz)
+                    self._nav_start = time.time()
+                    return AgentAction(agent_name="", action="move_to",
+                                       params={"x": ix, "y": iy, "z": iz})
+            
+            # Priority 2: Wood nearby while exploring → stop and mine
             wood_nearby = [b for b in blocks if b.get("type","").upper() in 
                           ("OAK_LOG","BIRCH_LOG","SPRUCE_LOG","JUNGLE_LOG","ACACIA_LOG",
                            "DARK_OAK_LOG","CHERRY_LOG","MANGROVE_LOG")]
-            if wood_nearby:
+            if wood_nearby and pos_key(wood_nearby[0]) not in self._recently_mined:
                 t = min(wood_nearby, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
                 self._nav_target = None
                 return AgentAction(agent_name="", action="mine_block",
                     params={"x": int(t.get("x",px)), "y": int(t.get("y",py-1)), "z": int(t.get("z",pz))})
             
-            # Try to move towards a target from the daily plan
+            # Priority 3: Plan coordinates
             plan_text = " ".join(self.planner.daily_plan)
             coords = re.findall(r'\((-?\d+),\s*(-?\d+),\s*(-?\d+)\)', plan_text)
             if coords and random.random() < 0.7:
@@ -246,11 +273,11 @@ class ValisAgent:
                 self._nav_start = time.time()
                 return AgentAction(agent_name="", action="move_to",
                                    params={"x": tx, "y": ty, "z": tz})
-            # Systematic exploration: bias toward forests if agent has no wood
+            
+            # Priority 4: Systematic exploration
             if not hasattr(self, '_explore_heading'):
                 self._explore_heading = None
                 self._explore_steps = 0
-            # Pick heading biased toward forest biomes if agent needs wood
             nb = perception.nearby_biomes
             has_wood = any(k in ("oak_log","birch_log","spruce_log","acacia_log","dark_oak_log") 
                           for k in perception.inventory)
@@ -258,7 +285,6 @@ class ValisAgent:
                 forest_dirs = []
                 for d, b in nb.items():
                     if "forest" in b or "taiga" in b or "jungle" in b or "grove" in b or "wood" in b:
-                        # Map direction to (dx, dz) heading
                         dir_map = {"north": (0, -1), "south": (0, 1), "east": (1, 0), "west": (-1, 0)}
                         if d in dir_map:
                             forest_dirs.append(dir_map[d])
@@ -281,7 +307,6 @@ class ValisAgent:
         if hint in ("rest", "idle"):
             return AgentAction(agent_name="", action="idle")
 
-        # Complex actions: fall back to LLM
         return None
 
     def receive_perception(self, perception: PerceptionData):
