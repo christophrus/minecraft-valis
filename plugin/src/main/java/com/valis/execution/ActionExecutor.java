@@ -165,14 +165,26 @@ public class ActionExecutor {
         RECIPES.put("oak_planks", Map.of("oak_log", 1));
         RECIPES.put("birch_planks", Map.of("birch_log", 1));
         RECIPES.put("spruce_planks", Map.of("spruce_log", 1));
+        RECIPES.put("jungle_planks", Map.of("jungle_log", 1));
+        RECIPES.put("acacia_planks", Map.of("acacia_log", 1));
+        RECIPES.put("dark_oak_planks", Map.of("dark_oak_log", 1));
+        RECIPES.put("cherry_planks", Map.of("cherry_log", 1));
         RECIPES.put("stick", Map.of("oak_planks", 2));
         RECIPES.put("crafting_table", Map.of("oak_planks", 4));
+        RECIPES.put("chest", Map.of("oak_planks", 8));
+        RECIPES.put("furnace", Map.of("cobblestone", 8));
         RECIPES.put("wooden_pickaxe", Map.of("oak_planks", 3, "stick", 2));
         RECIPES.put("stone_pickaxe", Map.of("cobblestone", 3, "stick", 2));
+        RECIPES.put("iron_pickaxe", Map.of("iron_ingot", 3, "stick", 2));
         RECIPES.put("wooden_axe", Map.of("oak_planks", 3, "stick", 2));
         RECIPES.put("stone_axe", Map.of("cobblestone", 3, "stick", 2));
         RECIPES.put("wooden_sword", Map.of("oak_planks", 2, "stick", 1));
         RECIPES.put("stone_sword", Map.of("cobblestone", 2, "stick", 1));
+        RECIPES.put("wooden_shovel", Map.of("oak_planks", 1, "stick", 2));
+        RECIPES.put("stone_shovel", Map.of("cobblestone", 1, "stick", 2));
+        RECIPES.put("wooden_hoe", Map.of("oak_planks", 2, "stick", 2));
+        RECIPES.put("torch", Map.of("stick", 1, "coal", 1));
+        RECIPES.put("oak_door", Map.of("oak_planks", 6));
     }}
 
     private void craft(JsonObject params) {
