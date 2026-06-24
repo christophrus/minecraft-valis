@@ -186,17 +186,18 @@ public class ActionExecutor {
 
                 // Send block break animation packet to all nearby players
                 try {
-                    PacketContainer packet = ProtocolLibrary.getProtocolManager()
-                            .createPacket(PacketType.Play.Server.BLOCK_BREAK_ANIMATION);
-                    // In 1.21.x protocol: entityId(VarInt), location(packed long), destroyStage(byte)
-                    // ProtocolLib typed accessors may not map correctly for newer versions,
-                    // so use the generic getModifier() which exposes all fields directly.
-                    long packedPos = ((long)(x & 0x3FFFFFF) << 38)
-                                   | ((long)(z & 0x3FFFFFF) << 12)
-                                   | (long)(y & 0xFFF);
-                    packet.getModifier().write(0, entityId);
-                    packet.getModifier().write(1, packedPos);
-                    packet.getModifier().write(2, (byte) stage);
+                    // Build NMS ClientboundBlockDestructionPacket via reflection:
+                    //   new ClientboundBlockDestructionPacket(entityId, BlockPos, progress)
+                    // This bypasses ProtocolLib's field mapping which can fail on JDK 25 with final fields.
+                    Class<?> nmsBlockPos = Class.forName("net.minecraft.core.BlockPos");
+                    Object nmsPos = nmsBlockPos.getConstructor(int.class, int.class, int.class)
+                            .newInstance(x, y, z);
+                    Class<?> nmsPacketClass = Class.forName(
+                            "net.minecraft.network.protocol.game.ClientboundBlockDestructionPacket");
+                    Object nmsPacket = nmsPacketClass.getConstructor(int.class, nmsBlockPos, int.class)
+                            .newInstance(entityId, nmsPos, stage);
+                    PacketContainer packet = new PacketContainer(
+                            PacketType.Play.Server.BLOCK_BREAK_ANIMATION, nmsPacket);
 
                     for (var player : world.getPlayers()) {
                         if (player.getLocation().distanceSquared(
