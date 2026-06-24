@@ -135,12 +135,14 @@ Available actions:
 - move_to(x, y, z): Walk to coordinates
 - mine_block(x, y, z): Mine the block at given position — use exact coordinates from "Nearby blocks" above!
 - place_block(block_type, x, y, z): Place a block
-- craft(item): Craft an item using inventory (e.g., oak_planks, stick, wooden_pickaxe, stone_pickaxe)
+- craft(item): Craft using inventory. Known recipes: oak_planks (needs oak_log), spruce_planks (needs spruce_log), stick (needs oak_planks x2), crafting_table (needs oak_planks x4), wooden_pickaxe (needs oak_planks x3 + stick x2), stone_pickaxe (needs cobblestone x3 + stick x2), wooden_axe (needs oak_planks x3 + stick x2), wooden_sword (needs oak_planks x2 + stick x1)
 - look_at(x, y, z): Look at a position
 - chat(message): Send a chat message
 - idle: Do nothing this tick
 
-IMPORTANT: If your task involves gathering resources, use mine_block with the exact coordinates shown under "Nearby blocks". Do NOT guess coordinates — copy them from the perception data. If the block you need is not nearby, use move_to to explore.
+IMPORTANT: If you have wood logs in your inventory, craft planks FIRST (craft(oak_planks) or craft(spruce_planks)), then craft sticks, then tools.
+If your task involves gathering resources, use mine_block with the exact coordinates shown under "Nearby blocks".
+If the block you need is not nearby, use move_to to explore.
 
 Respond with exactly ONE action in format: action_name(param1=value1, param2=value2, ...)"""
 
