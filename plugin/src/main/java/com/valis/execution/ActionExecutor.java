@@ -60,7 +60,7 @@ public class ActionExecutor {
     }
 
     /**
-     * Navigate the NPC to a target, falling back to teleport if pathfinding fails.
+     * Teleport the NPC to a target position (reliable, instant).
      */
     private void moveTo(JsonObject params) {
         int x = (int) params.get("x").getAsDouble();
@@ -69,10 +69,9 @@ public class ActionExecutor {
 
         NPC npc = agent.getNpc();
         if (npc != null && npc.isSpawned()) {
-            Location current = npc.getStoredLocation();
-            Location target = new Location(current.getWorld(), x + 0.5, y, z + 0.5);
-            // Find safe ground
+            Location target = new Location(npc.getStoredLocation().getWorld(), x + 0.5, y, z + 0.5);
             World world = target.getWorld();
+            // Find safe ground below target
             for (int dy = 0; dy < 10; dy++) {
                 Block check = world.getBlockAt(x, y - dy, z);
                 if (check.getType().isSolid() && check.getType() != Material.WATER && check.getType() != Material.LAVA) {
@@ -80,18 +79,9 @@ public class ActionExecutor {
                     break;
                 }
             }
-            // Try pathfinding first (with water enabled)
-            try {
-                npc.getNavigator().getLocalParameters().avoidWater(false);
-                npc.getNavigator().setTarget(target);
-                plugin.getWsBridge().sendActionResult(agent.getAgentName(), "move_to",
-                        true, "navigating to " + x + "," + target.getBlockY() + "," + z);
-            } catch (Exception e) {
-                // Fallback: teleport
-                npc.teleport(target, PlayerTeleportEvent.TeleportCause.PLUGIN);
-                plugin.getWsBridge().sendActionResult(agent.getAgentName(), "move_to",
-                        true, "teleported to " + x + "," + target.getBlockY() + "," + z);
-            }
+            npc.teleport(target, PlayerTeleportEvent.TeleportCause.PLUGIN);
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "move_to",
+                    true, "teleported to " + x + "," + target.getBlockY() + "," + z);
         }
     }
 
