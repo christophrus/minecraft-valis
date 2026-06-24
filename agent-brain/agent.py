@@ -449,7 +449,7 @@ class ValisAgent:
                 dist = math.sqrt((px - tx)**2 + (py - ty)**2 + (pz - tz)**2)
                 elapsed = time.time() - getattr(self, '_nav_start', 0)
                 if dist > 3 and elapsed < 8:
-                    logger.debug(f"FAST-PATH: waiting for nav, dist={dist:.1f} elapsed={elapsed:.1f}s")
+                    logger.debug(f"FAST-PATH: waiting for nav, dist={dist:.1f} elapsed={elapsed:.1f}s target=({tx},{ty},{tz}) pos=({px},{py},{pz})")
                     return AgentAction(agent_name="", action="idle")
                 self._nav_target = None
             
@@ -588,6 +588,22 @@ class ValisAgent:
             nb_str = " nbiomes=" + "|".join(f"{d[0]}:{b}" for d, b in nb.items() if b != perception.biome)
         logger.info(f"Agent {self.name} tick {self.tick_count}: pos=({perception.position.get('x',0)},{perception.position.get('y',0)},{perception.position.get('z',0)}) biome={perception.biome}{nb_str} inv={real_inv}")
 
+        # --- NAV debug: track position changes since last move_to ---
+        if hasattr(self, '_last_move_info') and self._last_move_info:
+            lmi = self._last_move_info
+            lpx, lpy, lpz = lmi["from_pos"]
+            cpx = perception.position.get("x", 0)
+            cpy = perception.position.get("y", 0)
+            cpz = perception.position.get("z", 0)
+            pos_moved = abs(cpx - lpx) > 0.5 or abs(cpy - lpy) > 0.5 or abs(cpz - lpz) > 0.5
+            ticks_since = self.tick_count - lmi["tick"]
+            elapsed = time.time() - lmi["time"]
+            if pos_moved:
+                logger.debug(f"NAV-PROGRESS: moved from ({lpx},{lpy},{lpz}) to ({cpx:.0f},{cpy:.0f},{cpz:.0f}) after {ticks_since}t ({elapsed:.1f}s)")
+                self._last_move_info = {}  # Reset tracker on position change
+            elif ticks_since >= 3 and elapsed > 4:
+                logger.warning(f"NAV-STALL: no movement for {ticks_since} ticks ({elapsed:.1f}s) since move_to target=({lmi['target'][0]},{lmi['target'][1]},{lmi['target'][2]}), still at ({cpx:.0f},{cpy:.0f},{cpz:.0f})")
+
         try:
             # Step 1: Run Cognitive Controller (PIANO bottleneck)
             decision = await self.controller.decide(self)
@@ -682,6 +698,21 @@ class ValisAgent:
                 ppos = perception.position
                 if abs(ppos.get("x", 0)) <= 2 and abs(ppos.get("z", 0)) <= 2:
                     logger.warning(f"Agent {self.name} at spawn ({ppos.get('x')},{ppos.get('y')},{ppos.get('z')}) — possible pathfinder reset")
+
+            # --- TRACK move_to execution ---
+            if parsed and parsed.action == "move_to":
+                now = time.time()
+                if not hasattr(self, '_last_move_info'):
+                    self._last_move_info: dict = {}
+                tx = parsed.params.get("x", px)
+                ty = parsed.params.get("y", py)
+                tz = parsed.params.get("z", pz)
+                self._last_move_info = {
+                    "tick": self.tick_count, "time": now,
+                    "target": (tx, ty, tz),
+                    "from_pos": (px, py, pz),
+                }
+                logger.debug(f"NAV-SEND: tick={self.tick_count} from=({px},{py},{pz}) to=({tx},{ty},{tz}) dist={math.sqrt((px-tx)**2+(py-ty)**2+(pz-tz)**2):.0f}m")
 
             logger.info(f"Agent {self.name} tick {self.tick_count}: {parsed.action} {parsed.params}")
 
