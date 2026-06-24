@@ -60,10 +60,10 @@ class CognitiveController:
         # Goal context
         goal_text = "\n".join(f"- {g}" for g in agent.goals)
 
-        # Recent memories
-        recent = agent.memory.get_recent(n=5)
+        # Recent memories (trimmed for speed)
+        recent = agent.memory.get_recent(n=3)
         memory_text = "\n".join(
-            f"- [{m.created.strftime('%H:%M')}] {m.content[:150]}"
+            f"- [{m.created.strftime('%H:%M')}] {m.content[:80]}"
             for m in recent
         )
 

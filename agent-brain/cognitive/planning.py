@@ -145,10 +145,10 @@ Respond with exactly ONE action in format: action_name(param1=value1, param2=val
 
     async def _get_memory_context(self, agent: "ValisAgent") -> str:
         """Get a summary of recent memories for planning context."""
-        recent = agent.memory.get_recent(n=10)
+        recent = agent.memory.get_recent(n=5)
         if not recent:
             return "No memories yet."
         return "\n".join(
-            f"- [{m.created.strftime('%H:%M')}] ({m.node_type}) {m.content[:200]}"
+            f"- [{m.created.strftime('%H:%M')}] ({m.node_type}) {m.content[:100]}"
             for m in recent
         )

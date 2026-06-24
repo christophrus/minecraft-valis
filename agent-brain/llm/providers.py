@@ -23,7 +23,7 @@ class LLMConfig:
     provider: str  # "openai", "anthropic", "ollama"
     model: str = ""
     temperature: float = 0.7
-    max_tokens: int = 1024
+    max_tokens: int = 512
     api_key: str = ""
     base_url: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
