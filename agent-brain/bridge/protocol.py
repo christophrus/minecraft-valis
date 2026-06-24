@@ -26,6 +26,7 @@ class PerceptionData:
     health: float = 20.0
     inventory: dict[str, int] = field(default_factory=dict)  # material_name -> count
     biome: str = "plains"
+    nearby_biomes: dict[str, str] = field(default_factory=dict)  # {"north": "forest", ...}
 
     @classmethod
     def from_json(cls, data: dict) -> "PerceptionData":
@@ -41,6 +42,7 @@ class PerceptionData:
             health=data.get("health", 20.0),
             inventory=data.get("inventory", {}),
             biome=data.get("biome", "plains"),
+            nearby_biomes=data.get("nearby_biomes", {}),
         )
 
 

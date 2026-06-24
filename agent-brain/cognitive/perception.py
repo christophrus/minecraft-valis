@@ -56,7 +56,10 @@ class PerceptionProcessor:
 
         # Biome
         if p.biome:
-            lines.append(f"The biome is {p.biome}.")
+            lines.append(f"The biome here is {p.biome}.")
+        if p.nearby_biomes:
+            hints = ", ".join(f"{d}: {b}" for d, b in p.nearby_biomes.items())
+            lines.append(f"Biomes in the distance: {hints}.")
 
         # Nearby blocks (with positions so agent knows WHERE to act)
         if p.nearby_blocks:

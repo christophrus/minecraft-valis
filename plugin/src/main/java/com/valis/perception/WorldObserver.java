@@ -59,6 +59,20 @@ public class WorldObserver {
         var biome = world.getBiome(loc);
         report.addProperty("biome", biome.getKey().getKey().replace("_", " "));
 
+        // Nearby biomes (scan 100 blocks in cardinal directions)
+        JsonObject nearbyBiomes = new JsonObject();
+        int bd = 100;
+        int bx = loc.getBlockX(), by = loc.getBlockY(), bz = loc.getBlockZ();
+        var northB = world.getBiome(bx, by, bz - bd);
+        var southB = world.getBiome(bx, by, bz + bd);
+        var eastB = world.getBiome(bx + bd, by, bz);
+        var westB = world.getBiome(bx - bd, by, bz);
+        nearbyBiomes.addProperty("north", northB.getKey().getKey().replace("_", " "));
+        nearbyBiomes.addProperty("south", southB.getKey().getKey().replace("_", " "));
+        nearbyBiomes.addProperty("east", eastB.getKey().getKey().replace("_", " "));
+        nearbyBiomes.addProperty("west", westB.getKey().getKey().replace("_", " "));
+        report.add("nearby_biomes", nearbyBiomes);
+
         // Nearby blocks (sample key blocks within radius)
         report.add("nearby_blocks", observeBlocks(loc, world));
 
