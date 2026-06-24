@@ -201,6 +201,10 @@ class ValisAgent:
                 solid_blocks = [b for b in solid_blocks if pos_key(b) not in self._recently_mined]
                 if solid_blocks:
                     target = min(solid_blocks, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
+                else:
+                    # Debug: what types ARE in perception?
+                    sample_types = list(set(b.get("type","?") for b in blocks[:20]))
+                    logger.debug(f"FAST-PATH: no solid_blocks! perception sample types: {sample_types} total={len(blocks)}")
             
             if target:
                 target_type = target.get("type", "").upper()
