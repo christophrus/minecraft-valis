@@ -1,5 +1,9 @@
 package com.valis.execution;
 
+import com.comphenix.protocol.PacketType;
+import com.comphenix.protocol.ProtocolLibrary;
+import com.comphenix.protocol.events.PacketContainer;
+import com.comphenix.protocol.wrappers.BlockPosition;
 import com.google.gson.JsonObject;
 import com.valis.ValisPlugin;
 import com.valis.agent.VirtualAgent;
@@ -9,6 +13,7 @@ import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.event.player.PlayerTeleportEvent;
+import org.bukkit.scheduler.BukkitRunnable;
 
 import java.util.logging.Logger;
 
@@ -136,6 +141,8 @@ public class ActionExecutor {
 
     /**
      * Mine/break a block at the specified position.
+     * Plays a block-breaking animation (stages 0-9 over ~1 second) via ProtocolLib,
+     * then actually breaks the block.
      */
     private void mineBlock(JsonObject params) {
         int x = (int) params.get("x").getAsDouble();
@@ -152,18 +159,53 @@ public class ActionExecutor {
             return;
         }
 
-        // Simulate block breaking: drop items, set to air
+        // Use NPC entity ID as the "breaker" entity for the animation
+        int entityId = agent.getNpc().getEntity().getEntityId();
+        BlockPosition pos = new BlockPosition(x, y, z);
         var matName = block.getType().name();
-        var drops = block.getDrops();
-        block.breakNaturally();
-        for (var drop : drops) {
-            agent.addToInventory(drop.getType(), drop.getAmount());
-        }
-        if (drops.isEmpty()) {
-            agent.addToInventory(block.getType(), 1);
-        }
-        plugin.getWsBridge().sendActionResult(agent.getAgentName(), "mine_block",
-                true, "mined " + matName + " at " + x + "," + y + "," + z);
+
+        // Play block-breaking animation stages 0-9 over ~1.1 seconds
+        new BukkitRunnable() {
+            int stage = 0;
+
+            @Override
+            public void run() {
+                if (stage > 9) {
+                    // Animation complete — actually break the block
+                    var drops = block.getDrops();
+                    block.breakNaturally();
+                    for (var drop : drops) {
+                        agent.addToInventory(drop.getType(), drop.getAmount());
+                    }
+                    if (drops.isEmpty()) {
+                        agent.addToInventory(block.getType(), 1);
+                    }
+                    plugin.getWsBridge().sendActionResult(agent.getAgentName(), "mine_block",
+                            true, "mined " + matName + " at " + x + "," + y + "," + z);
+                    this.cancel();
+                    return;
+                }
+
+                // Send block break animation packet to all nearby players
+                try {
+                    PacketContainer packet = new PacketContainer(PacketType.Play.Server.BLOCK_BREAK_ANIMATION);
+                    packet.getIntegers().write(0, entityId);
+                    packet.getBlockPositionModifier().write(0, pos);
+                    packet.getIntegers().write(1, stage);
+
+                    for (var player : world.getPlayers()) {
+                        if (player.getLocation().distanceSquared(
+                                new Location(world, x, y, z)) < 64 * 64) {
+                            ProtocolLibrary.getProtocolManager().sendServerPacket(player, packet);
+                        }
+                    }
+                } catch (Exception e) {
+                    log.warning("Failed to send block break animation packet: " + e.getMessage());
+                }
+
+                stage++;
+            }
+        }.runTaskTimer(plugin, 0L, 2L);  // 2 ticks = ~100ms between stages, total ~1s for 10 stages
     }
 
     /**
