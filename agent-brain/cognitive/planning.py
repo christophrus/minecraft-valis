@@ -83,6 +83,8 @@ Format: one task per line, starting with a dash (-)."""
                 tasks.append(line)
 
         self.daily_plan = tasks if tasks else ["Explore the area", "Gather resources", "Find shelter"]
+        if not tasks:
+            logger.warning(f"Agent {agent.name} plan parse FAILED. Raw LLM response: '{response[:300]}'")
         self.last_daily_plan_time = datetime.datetime.now()
         self.current_task = self.daily_plan[0] if self.daily_plan else ""
 
