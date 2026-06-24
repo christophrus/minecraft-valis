@@ -140,6 +140,8 @@ class ValisAgent:
             success=result.success,
             details=result.details,
         )
+        logger.debug(f"Agent {self.name} action result: {result.action} -> {'OK' if result.success else 'FAIL'}: {result.details}")
+        self._perception_event.set()  # Wake cognitive loop to process result
 
     async def cognitive_tick(self):
         """
