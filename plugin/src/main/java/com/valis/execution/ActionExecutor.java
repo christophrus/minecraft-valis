@@ -188,10 +188,12 @@ public class ActionExecutor {
 
                 // Send block break animation packet to all nearby players
                 try {
-                    PacketContainer packet = new PacketContainer(PacketType.Play.Server.BLOCK_BREAK_ANIMATION);
+                    PacketContainer packet = ProtocolLibrary.getProtocolManager()
+                            .createPacket(PacketType.Play.Server.BLOCK_BREAK_ANIMATION);
                     packet.getIntegers().write(0, entityId);
                     packet.getBlockPositionModifier().write(0, pos);
-                    packet.getIntegers().write(1, stage);
+                    // destroyStage is a byte field — write via getBytes() not getIntegers()
+                    packet.getBytes().write(0, (byte) stage);
 
                     for (var player : world.getPlayers()) {
                         if (player.getLocation().distanceSquared(
