@@ -69,10 +69,18 @@ Format: one task per line, starting with a dash (-)."""
         tasks = []
         for line in response.strip().split("\n"):
             line = line.strip()
+            # Support "- task", "1. task", "* task", or bare lines
             if line.startswith("- "):
                 tasks.append(line[2:])
             elif line.startswith("-"):
                 tasks.append(line[1:])
+            elif line and line[0].isdigit() and ". " in line[:4]:
+                tasks.append(line.split(". ", 1)[1])
+            elif line.startswith("* "):
+                tasks.append(line[2:])
+            elif line and not line.startswith(("#", "//", "```")) and len(line) > 5:
+                # Bare line that looks like a task
+                tasks.append(line)
 
         self.daily_plan = tasks if tasks else ["Explore the area", "Gather resources", "Find shelter"]
         self.last_daily_plan_time = datetime.datetime.now()

@@ -234,12 +234,12 @@ class ValisAgent:
                             "oak_wood", "spruce_wood", "birch_wood")}
                         if placeable:
                             place_mat = max(placeable, key=placeable.get)
-                    # Find free air above target, skip recently failed Y levels
+                    # Find free air above target, skip recently placed/failed Y levels
                     above_y = None
                     for dy in range(1, 6):
                         test_y = int(ty) + dy
                         test_key = f"{int(tx)},{test_y},{int(tz)}"
-                        if test_key in self._recently_failed_place:
+                        if test_key in self._recently_failed_place or test_key in self._recently_placed:
                             continue
                         blocked = any(b.get("x",0)==int(tx) and b.get("y",0)==test_y and b.get("z",0)==int(tz)
                                       and b.get("type","").upper() not in ("AIR","CAVE_AIR","VOID_AIR") for b in blocks)
