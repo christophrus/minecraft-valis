@@ -197,8 +197,12 @@ class ValisAgent:
                     inv = perception.inventory
                     place_mat = "dirt"
                     if inv:
-                        # Prefer most abundant, filtering non-placeables
-                        placeable = {k:v for k,v in inv.items() if k.lower() not in ("air", "wheat_seeds", "cornflower")}
+                        # Prefer most abundant, filtering non-placeables and raw materials
+                        placeable = {k:v for k,v in inv.items() 
+                            if k.lower() not in ("air", "wheat_seeds", "cornflower",
+                            "oak_log", "spruce_log", "birch_log", "jungle_log", "acacia_log",
+                            "dark_oak_log", "cherry_log", "mangrove_log",
+                            "oak_wood", "spruce_wood", "birch_wood")}
                         if placeable:
                             place_mat = max(placeable, key=placeable.get)
                     above_y = int(ty) + 1
