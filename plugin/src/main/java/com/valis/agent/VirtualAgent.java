@@ -143,6 +143,11 @@ public class VirtualAgent {
         return true;
     }
 
+    public boolean hasInInventory(String material, int amount) {
+        Integer current = inventory.get(material.toLowerCase());
+        return current != null && current >= amount;
+    }
+
     public JsonObject inventoryToJson() {
         JsonObject json = new JsonObject();
         for (var entry : inventory.entrySet()) {

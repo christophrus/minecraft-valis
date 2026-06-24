@@ -47,6 +47,7 @@ public class ActionExecutor {
                 case "mine_block" -> mineBlock(params);
                 case "place_block" -> placeBlock(params);
                 case "craft" -> craft(params);
+                case "equip" -> equip(params);
                 case "look_at" -> lookAt(params);
                 case "chat" -> chat(params);
                 case "idle" -> idle();
@@ -141,7 +142,7 @@ public class ActionExecutor {
     /**
      * Mine/break a block at the specified position.
      * Plays a block-breaking animation (stages 0-9 over ~1 second) via ProtocolLib,
-     * then actually breaks the block.
+     * then actually breaks the block. Uses the best available tool from inventory.
      */
     private void mineBlock(JsonObject params) {
         int x = (int) params.get("x").getAsDouble();
@@ -152,15 +153,28 @@ public class ActionExecutor {
         if (world == null) return;
 
         Block block = world.getBlockAt(x, y, z);
-        if (block.getType() == Material.AIR || block.getType() == Material.BEDROCK) {
+        var blockType = block.getType();
+        if (blockType == Material.AIR || blockType == Material.BEDROCK) {
             plugin.getWsBridge().sendActionResult(agent.getAgentName(), "mine_block",
-                    false, "cannot mine " + block.getType().name());
+                    false, "cannot mine " + blockType.name());
             return;
+        }
+
+        // Pick the best tool for this block from agent's inventory
+        Material bestTool = getBestTool(blockType);
+
+        // Visually equip the tool on the NPC so players can see it
+        if (bestTool != null) {
+            var entity = agent.getNpc().getEntity();
+            if (entity instanceof org.bukkit.entity.LivingEntity living) {
+                living.getEquipment().setItemInMainHand(
+                        new org.bukkit.inventory.ItemStack(bestTool));
+            }
         }
 
         // Use NPC entity ID as the "breaker" entity for the animation
         int entityId = agent.getNpc().getEntity().getEntityId();
-        var matName = block.getType().name();
+        var matName = blockType.name();
 
         // Play block-breaking animation stages 0-9 over ~1.1 seconds
         new BukkitRunnable() {
@@ -170,16 +184,20 @@ public class ActionExecutor {
             public void run() {
                 if (stage > 9) {
                     // Animation complete — actually break the block
-                    var drops = block.getDrops();
+                    var toolStack = bestTool != null
+                            ? new org.bukkit.inventory.ItemStack(bestTool)
+                            : null;
+                    var drops = block.getDrops(toolStack);
                     block.breakNaturally();
                     for (var drop : drops) {
                         agent.addToInventory(drop.getType(), drop.getAmount());
                     }
                     if (drops.isEmpty()) {
-                        agent.addToInventory(block.getType(), 1);
+                        agent.addToInventory(blockType, 1);
                     }
                     plugin.getWsBridge().sendActionResult(agent.getAgentName(), "mine_block",
-                            true, "mined " + matName + " at " + x + "," + y + "," + z);
+                            true, "mined " + matName + " at " + x + "," + y + "," + z
+                            + (bestTool != null ? " with " + bestTool.name().toLowerCase() : ""));
                     this.cancel();
                     return;
                 }
@@ -212,6 +230,86 @@ public class ActionExecutor {
                 stage++;
             }
         }.runTaskTimer(plugin, 0L, 2L);  // 2 ticks = ~100ms between stages, total ~1s for 10 stages
+    }
+
+    /**
+     * Returns the best tool Material from the agent's inventory for mining the given block type,
+     * or null if no suitable tool is available (bare hands).
+     */
+    private Material getBestTool(Material blockType) {
+        var inv = agent.getInventory();
+        String blockName = blockType.name().toLowerCase();
+
+        // Stone/ores → pickaxe
+        if (blockName.contains("stone") || blockName.contains("ore") || blockName.contains("cobble")
+                || blockName.contains("iron") || blockName.contains("gold") || blockName.contains("diamond")
+                || blockName.contains("coal") || blockName.contains("lapis") || blockName.contains("redstone")
+                || blockName.contains("emerald") || blockName.contains("copper")
+                || blockName.contains("obsidian") || blockName.contains("granite")
+                || blockName.contains("diorite") || blockName.contains("andesite")
+                || blockName.contains("netherrack") || blockName.contains("deepslate")
+                || blockName.contains("tuff") || blockName.contains("sandstone")
+                || blockName.contains("furnace") || blockName.contains("iron_bars")) {
+            for (var entry : inv.entrySet()) {
+                String key = entry.getKey().toLowerCase();
+                if (key.contains("pickaxe") && entry.getValue() > 0) {
+                    return Material.matchMaterial(entry.getKey().toUpperCase());
+                }
+            }
+        }
+
+        // Wood/logs/planks → axe
+        if (blockName.contains("log") || blockName.contains("wood") || blockName.contains("planks")
+                || blockName.contains("crafting_table") || blockName.contains("fence")
+                || blockName.contains("door") || blockName.contains("trapdoor")
+                || blockName.contains("chest") || blockName.contains("bamboo")) {
+            for (var entry : inv.entrySet()) {
+                String key = entry.getKey().toLowerCase();
+                if (key.contains("axe") && entry.getValue() > 0) {
+                    return Material.matchMaterial(entry.getKey().toUpperCase());
+                }
+            }
+        }
+
+        // Dirt/sand/gravel/clay → shovel
+        if (blockName.contains("dirt") || blockName.contains("sand") || blockName.contains("gravel")
+                || blockName.contains("clay") || blockName.contains("snow")
+                || blockName.contains("grass_block") || blockName.contains("mud")) {
+            for (var entry : inv.entrySet()) {
+                String key = entry.getKey().toLowerCase();
+                if (key.contains("shovel") && entry.getValue() > 0) {
+                    return Material.matchMaterial(entry.getKey().toUpperCase());
+                }
+            }
+        }
+
+        return null;  // No suitable tool
+    }
+
+    /**
+     * Equip an item in the NPC's main hand (visible to all players).
+     */
+    private void equip(JsonObject params) {
+        String itemName = params.has("item") ? params.get("item").getAsString().toLowerCase() : "";
+        Material mat = Material.matchMaterial(itemName.toUpperCase());
+        if (mat == null) {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "equip",
+                    false, "unknown item: " + itemName);
+            return;
+        }
+        if (!agent.hasInInventory(itemName, 1)) {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "equip",
+                    false, "not in inventory: " + itemName);
+            return;
+        }
+        // NPC entity is a LivingEntity (Citizens uses player-like entities)
+        var entity = agent.getNpc().getEntity();
+        if (entity instanceof org.bukkit.entity.LivingEntity living) {
+            living.getEquipment().setItemInMainHand(
+                    new org.bukkit.inventory.ItemStack(mat));
+        }
+        plugin.getWsBridge().sendActionResult(agent.getAgentName(), "equip",
+                true, "equipped " + itemName);
     }
 
     /**

@@ -201,7 +201,21 @@ class ValisAgent:
             if plank_type not in self._recently_crafted:
                 craft_action = AgentAction(agent_name="", action="craft", params={"item": plank_type})
                 logger.debug(f"FAST-PATH: pre-emptive CRAFT planks ({best_log}={inv.get(best_log,0)})")
-        # Pickaxe BEFORE sticks — reserve 3 planks for pickaxe, only craft sticks from surplus
+        # Crafting table: when we have 4+ planks, no table in inventory, and none placed nearby
+        elif total_planks >= 4 and inv.get("crafting_table", 0) < 1 and not self._crafting_table_placed:
+            if "crafting_table" not in self._recently_crafted:
+                craft_action = AgentAction(agent_name="", action="craft", params={"item": "crafting_table"})
+                logger.debug(f"FAST-PATH: pre-emptive CRAFT crafting_table (planks={total_planks})")
+        # Sticks: craft when we have surplus planks beyond what's needed for pickaxe
+        # If crafting_table is placed, we only need to reserve 3 planks for pickaxe (not 4 for table too)
+        elif total_sticks < 4:
+            reserve = 3  # planks reserved for pickaxe
+            if total_planks > reserve:
+                # We have surplus planks → craft sticks (2 planks → 4 sticks)
+                if "stick" not in self._recently_crafted:
+                    craft_action = AgentAction(agent_name="", action="craft", params={"item": "stick"})
+                    logger.debug(f"FAST-PATH: pre-emptive CRAFT sticks (planks={total_planks}, reserve={reserve})")
+        # Pickaxe: 3 planks + 2 sticks
         elif total_sticks >= 2 and total_planks >= 3 and not has_pickaxe:
             pickaxe_type = "wooden_pickaxe"
             if inv.get("cobblestone", 0) >= 3:
@@ -209,15 +223,12 @@ class ValisAgent:
             if pickaxe_type not in self._recently_crafted:
                 craft_action = AgentAction(agent_name="", action="craft", params={"item": pickaxe_type})
                 logger.debug(f"FAST-PATH: pre-emptive CRAFT {pickaxe_type} (sticks={total_sticks}, planks={total_planks})")
-        # Crafting table: when we have 4+ planks, no table in inventory, and none placed nearby
-        elif total_planks >= 4 and inv.get("crafting_table", 0) < 1 and not self._crafting_table_placed:
-            if "crafting_table" not in self._recently_crafted:
-                craft_action = AgentAction(agent_name="", action="craft", params={"item": "crafting_table"})
-                logger.debug(f"FAST-PATH: pre-emptive CRAFT crafting_table (planks={total_planks})")
-        elif total_planks >= 5 and total_sticks < 4:
-            # Only craft sticks if we have 5+ planks (leaving 3 for pickaxe)
-            if "stick" not in self._recently_crafted:
-                craft_action = AgentAction(agent_name="", action="craft", params={"item": "stick"})
+        # Axe: 3 planks + 2 sticks (after pickaxe, if we still have materials)
+        elif total_sticks >= 2 and total_planks >= 3 and not any("axe" in k.lower() for k in inv):
+            axe_type = "wooden_axe"
+            if "stone_axe" not in self._recently_crafted and axe_type not in self._recently_crafted:
+                craft_action = AgentAction(agent_name="", action="craft", params={"item": axe_type})
+                logger.debug(f"FAST-PATH: pre-emptive CRAFT {axe_type} (sticks={total_sticks}, planks={total_planks})")
                 logger.debug(f"FAST-PATH: pre-emptive CRAFT sticks (planks={total_planks}, surplus={total_planks-3})")
         
         if craft_action:
