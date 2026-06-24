@@ -152,13 +152,16 @@ class ValisAgent:
                 # Block not in perception, but still navigate there
                 intent_target = {"x": ix, "y": iy, "z": iz, "type": "UNKNOWN"}
 
-        # --- Recently mined / failed-place tracking ---
+        # --- Recently mined / placed / failed-place tracking ---
         if not hasattr(self, '_recently_mined'):
             self._recently_mined: dict[str, float] = {}
+        if not hasattr(self, '_recently_placed'):
+            self._recently_placed: dict[str, float] = {}
         if not hasattr(self, '_recently_failed_place'):
             self._recently_failed_place: dict[str, float] = {}
         now = time.time()
         self._recently_mined = {k: v for k, v in self._recently_mined.items() if now - v < 5}
+        self._recently_placed = {k: v for k, v in self._recently_placed.items() if now - v < 30}
         self._recently_failed_place = {k: v for k, v in self._recently_failed_place.items() if now - v < 10}
         def pos_key(b): return f"{b.get('x',0)},{b.get('y',0)},{b.get('z',0)}"
 
@@ -209,8 +212,13 @@ class ValisAgent:
                 if hint == "mine" and not has_wood and target_type in ("DIRT","GRASS_BLOCK","STONE","COBBLESTONE","SAND","GRAVEL","SHORT_GRASS","ANDESITE","DIORITE","GRANITE","TUFF","DEEPSLATE"):
                     pass  # Fall through to move/explore
                 elif hint == "mine":
-                    self._recently_mined[f"{int(tx)},{int(ty)},{int(tz)}"] = now
-                    return AgentAction(agent_name="", action="mine_block", params={"x": int(tx), "y": int(ty), "z": int(tz)})
+                    tkey = f"{int(tx)},{int(ty)},{int(tz)}"
+                    if tkey in self._recently_placed:
+                        logger.debug(f"FAST-PATH: skip mine of recently placed block at ({int(tx)},{int(ty)},{int(tz)})")
+                        pass
+                    else:
+                        self._recently_mined[tkey] = now
+                        return AgentAction(agent_name="", action="mine_block", params={"x": int(tx), "y": int(ty), "z": int(tz)})
                 else:
                     inv = perception.inventory
                     place_mat = "dirt"
@@ -241,6 +249,8 @@ class ValisAgent:
                     elif place_mat == "dirt" and inv.get("oak_log", 0) >= 1:
                         return None  # Let LLM decide to craft
                     else:
+                        pkey = f"{int(tx)},{above_y},{int(tz)}"
+                        self._recently_placed[pkey] = now
                         return AgentAction(agent_name="", action="place_block",
                                            params={"block_type": place_mat, "x": int(tx), "y": above_y, "z": int(tz)})
             # No target found, fall through to move
@@ -425,6 +435,24 @@ class ValisAgent:
                 if not self._running:
                     return
                 parsed = self.executor.parse_action(action_str)
+                # If LLM returned empty/unparseable, use heuristic fallback instead of idle
+                if parsed is None or parsed.action == "idle":
+                    import random as _random
+                    inv = perception.inventory
+                    # If we have logs but no planks → craft planks
+                    if inv.get("oak_log", 0) >= 1 and inv.get("oak_planks", 0) < 4:
+                        logger.debug(f"FALLBACK-HEURISTIC: crafting planks (log={inv.get('oak_log',0)} planks={inv.get('oak_planks',0)})")
+                        parsed = AgentAction(agent_name="", action="craft", params={"item": "oak_planks"})
+                    # If we have planks but no sticks → craft sticks
+                    elif inv.get("oak_planks", 0) >= 2 and inv.get("stick", 0) < 4:
+                        logger.debug(f"FALLBACK-HEURISTIC: crafting sticks")
+                        parsed = AgentAction(agent_name="", action="craft", params={"item": "stick"})
+                    # If we have sticks and planks but no pickaxe
+                    elif inv.get("stick", 0) >= 2 and inv.get("oak_planks", 0) >= 3 and not any("pickaxe" in k for k in inv):
+                        logger.debug(f"FALLBACK-HEURISTIC: crafting wooden_pickaxe")
+                        parsed = AgentAction(agent_name="", action="craft", params={"item": "wooden_pickaxe"})
+                    else:
+                        logger.debug(f"FALLBACK-HEURISTIC: nothing to craft, staying idle")
 
             # Warn if agent position jumped to spawn (Citizens pathfinder bug)
             if perception and parsed and parsed.action == "move_to":
