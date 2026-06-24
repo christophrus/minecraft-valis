@@ -67,6 +67,17 @@ public class ValisPlugin extends JavaPlugin {
         }, this);
 
         log.info("Valis plugin enabled successfully.");
+
+        // Restore agents from existing Citizens NPCs (persists across restarts)
+        var registry = net.citizensnpcs.api.CitizensAPI.getNPCRegistry();
+        for (var npc : registry) {
+            if (npc.isSpawned() && npc.data().get("valis_personality") != null) {
+                var agent = com.valis.agent.VirtualAgent.restore(this, npc);
+                agents.put(agent.getAgentName(), agent);
+                agent.startPerceptionLoop();
+                log.info("Restored agent from NPC: " + agent.getAgentName());
+            }
+        }
     }
 
     @Override

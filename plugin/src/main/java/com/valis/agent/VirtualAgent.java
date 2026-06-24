@@ -54,7 +54,36 @@ public class VirtualAgent {
         npc.spawn(spawnLocation);
         npc.data().set(NPC.Metadata.NAMEPLATE_VISIBLE, true);
         npc.data().set(NPC.Metadata.GLOWING, false);
+        // Persist agent metadata
+        npc.data().set("valis_personality", personality);
+        npc.data().set("valis_inventory", inventory);
         log.info("NPC spawned: " + name);
+    }
+
+    /** Reconnect to an existing Citizens NPC after server restart. */
+    public static VirtualAgent restore(ValisPlugin plugin, NPC npc) {
+        String name = npc.getName();
+        String personality = npc.data().get("valis_personality", "default");
+        Location loc = npc.getStoredLocation();
+        VirtualAgent agent = new VirtualAgent(plugin, name, personality, loc);
+        agent.npc = npc;
+        // Restore inventory
+        Object raw = npc.data().get("valis_inventory");
+        if (raw instanceof Map<?, ?> map) {
+            for (var entry : map.entrySet()) {
+                if (entry.getValue() instanceof Number num) {
+                    agent.inventory.put(entry.getKey().toString(), num.intValue());
+                }
+            }
+        }
+        plugin.getLogger().info("Restored agent: " + name + " inv=" + agent.inventory);
+        return agent;
+    }
+
+    public void saveInventory() {
+        if (npc != null) {
+            npc.data().set("valis_inventory", new HashMap<>(inventory));
+        }
     }
 
     public void despawn() {
@@ -101,6 +130,7 @@ public class VirtualAgent {
     public void addToInventory(Material mat, int amount) {
         String name = mat.name().toLowerCase();
         inventory.merge(name, amount, Integer::sum);
+        saveInventory();
     }
 
     public boolean removeFromInventory(String material, int amount) {
@@ -109,6 +139,7 @@ public class VirtualAgent {
         int remaining = current - amount;
         if (remaining <= 0) inventory.remove(material);
         else inventory.put(material, remaining);
+        saveInventory();
         return true;
     }
 
