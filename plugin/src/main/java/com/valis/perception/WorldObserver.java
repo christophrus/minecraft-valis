@@ -92,7 +92,7 @@ public class WorldObserver {
      */
     private JsonArray observeBlocks(Location loc, World world) {
         JsonArray blocks = new JsonArray();
-        int r = Math.min(radius, 8); // Limit block sampling to prevent overload
+        int r = Math.min(radius, 16); // Limit block sampling to prevent overload
         int bx = loc.getBlockX();
         int by = loc.getBlockY();
         int bz = loc.getBlockZ();

@@ -224,6 +224,16 @@ class ValisAgent:
                     return None  # Fall through to idle (don't cancel navigation)
                 self._nav_target = None  # Arrived or timed out
             
+            # While exploring, if wood/trees are nearby — stop and mine them!
+            wood_nearby = [b for b in blocks if b.get("type","").upper() in 
+                          ("OAK_LOG","BIRCH_LOG","SPRUCE_LOG","JUNGLE_LOG","ACACIA_LOG",
+                           "DARK_OAK_LOG","CHERRY_LOG","MANGROVE_LOG")]
+            if wood_nearby:
+                t = min(wood_nearby, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
+                self._nav_target = None
+                return AgentAction(agent_name="", action="mine_block",
+                    params={"x": int(t.get("x",px)), "y": int(t.get("y",py-1)), "z": int(t.get("z",pz))})
+            
             # Try to move towards a target from the daily plan
             plan_text = " ".join(self.planner.daily_plan)
             coords = re.findall(r'\((-?\d+),\s*(-?\d+),\s*(-?\d+)\)', plan_text)
