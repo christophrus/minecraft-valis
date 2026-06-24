@@ -202,7 +202,11 @@ public class ActionExecutor {
                 return;
             }
         }
-        int count = item.equals("stick") ? 4 : 1;
+        int count = switch (item) {
+            case "stick" -> 4;
+            case "torch" -> 4;
+            default -> item.endsWith("_planks") ? 4 : 1;
+        };
         agent.addToInventory(Material.valueOf(item.toUpperCase()), count);
         plugin.getWsBridge().sendActionResult(agent.getAgentName(), "craft",
                 true, "crafted " + count + "x " + item);
