@@ -175,6 +175,7 @@ class ValisAgent:
                     target = min(solid_blocks, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
             
             if target:
+                self._nav_target = None  # Not navigating, doing mine/place
                 tx, ty, tz = target.get("x", px), target.get("y", py - 1), target.get("z", pz)
                 if hint == "mine":
                     # Track position to avoid re-mining AIR on next tick
@@ -201,12 +202,21 @@ class ValisAgent:
             return None
 
         if hint in ("move", "explore", "mine", "place"):
+            # Don't cancel ongoing navigation unless close to destination
+            import random, re, math
+            if hasattr(self, '_nav_target') and self._nav_target:
+                tx, ty, tz = self._nav_target
+                dist = math.sqrt((px - tx)**2 + (py - ty)**2 + (pz - tz)**2)
+                if dist > 3:  # Still navigating, let NPC finish
+                    return AgentAction(agent_name="", action="idle")
+                self._nav_target = None
+            
             # Try to move towards a target from the daily plan
-            import random, re
             plan_text = " ".join(self.planner.daily_plan)
             coords = re.findall(r'\((-?\d+),\s*(-?\d+),\s*(-?\d+)\)', plan_text)
             if coords and random.random() < 0.7:
                 tx, ty, tz = map(int, random.choice(coords))
+                self._nav_target = (tx, ty, tz)
                 return AgentAction(agent_name="", action="move_to",
                                    params={"x": tx, "y": ty, "z": tz})
             # Systematic exploration: bias toward forests if agent has no wood
@@ -235,10 +245,13 @@ class ValisAgent:
                 self._explore_steps = 0
             dx, dz = self._explore_heading
             dist = random.randint(15, 30)
+            tx, ty, tz = px + dx * dist, py, pz + dz * dist
+            self._nav_target = (tx, ty, tz)
             return AgentAction(agent_name="", action="move_to",
-                               params={"x": px + dx * dist, "y": py, "z": pz + dz * dist})
+                               params={"x": tx, "y": ty, "z": tz})
 
         if hint in ("rest", "idle"):
+            self._nav_target = None
             return AgentAction(agent_name="", action="idle")
 
         # Complex actions: fall back to LLM
