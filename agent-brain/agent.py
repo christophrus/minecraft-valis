@@ -236,6 +236,7 @@ class AgentManager:
     def __init__(self):
         self.agents: dict[str, ValisAgent] = {}
         self._bridge = None
+        self._despawned_recently: set[str] = set()  # Prevent auto-recreate race
 
     def set_bridge(self, bridge):
         """Set the WebSocket bridge for agent communication."""
@@ -269,6 +270,7 @@ class AgentManager:
         agent = self.agents.pop(name, None)
         if agent:
             await agent.stop()
+            self._despawned_recently.add(name)
             logger.info(f"Agent despawned: {name}")
 
     async def handle_perception(self, perception: PerceptionData):
@@ -278,6 +280,10 @@ class AgentManager:
             agent.receive_perception(perception)
             logger.debug(f"Perception delivered to {perception.agent_name} (tick {perception.tick})")
         else:
+            # Don't auto-create if recently despawned (race condition)
+            if perception.agent_name in self._despawned_recently:
+                self._despawned_recently.discard(perception.agent_name)
+                return
             # Auto-create agent from perception data (server already has the NPC)
             logger.info(f"Auto-creating agent from perception: {perception.agent_name}")
             await self.spawn_agent(perception.agent_name, "default")
