@@ -134,6 +134,8 @@ Available actions:
 
 IMPORTANT: If your task involves gathering resources, use mine_block with the exact coordinates shown under "Nearby blocks". Do NOT guess coordinates — copy them from the perception data. If the block you need is not nearby, use move_to to explore.
 
+Respond with exactly ONE action in format: action_name(param1=value1, param2=value2, ...)"""
+
         response = await agent.llm.chat([
             {"role": "system", "content": "You control a Minecraft agent. Output ONLY the action, nothing else."},
             {"role": "user", "content": prompt},
