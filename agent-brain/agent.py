@@ -206,16 +206,7 @@ class ValisAgent:
             if "crafting_table" not in self._recently_crafted:
                 craft_action = AgentAction(agent_name="", action="craft", params={"item": "crafting_table"})
                 logger.debug(f"FAST-PATH: pre-emptive CRAFT crafting_table (planks={total_planks})")
-        # Sticks: craft when we have surplus planks beyond what's needed for pickaxe
-        # If crafting_table is placed, we only need to reserve 3 planks for pickaxe (not 4 for table too)
-        elif total_sticks < 4:
-            reserve = 3  # planks reserved for pickaxe
-            if total_planks > reserve:
-                # We have surplus planks → craft sticks (2 planks → 4 sticks)
-                if "stick" not in self._recently_crafted:
-                    craft_action = AgentAction(agent_name="", action="craft", params={"item": "stick"})
-                    logger.debug(f"FAST-PATH: pre-emptive CRAFT sticks (planks={total_planks}, reserve={reserve})")
-        # Pickaxe: 3 planks + 2 sticks
+        # Pickaxe: 3 planks + 2 sticks (BEFORE sticks check — don't waste planks on sticks first)
         elif total_sticks >= 2 and total_planks >= 3 and not has_pickaxe:
             pickaxe_type = "wooden_pickaxe"
             if inv.get("cobblestone", 0) >= 3:
@@ -226,8 +217,16 @@ class ValisAgent:
         # Axe: 3 planks + 2 sticks (after pickaxe, if we still have materials)
         elif total_sticks >= 2 and total_planks >= 3 and not any("axe" in k.lower() for k in inv):
             axe_type = "wooden_axe"
-            if "stone_axe" not in self._recently_crafted and axe_type not in self._recently_crafted:
+            if axe_type not in self._recently_crafted:
                 craft_action = AgentAction(agent_name="", action="craft", params={"item": axe_type})
+                logger.debug(f"FAST-PATH: pre-emptive CRAFT {axe_type} (sticks={total_sticks}, planks={total_planks})")
+        # Sticks: only craft from SURPLUS beyond what pickaxe needs (3 planks) + stick cost (2 planks)
+        # So threshold is: planks >= 3 (pickaxe) + 2 (stick cost) = 5 planks
+        elif total_sticks < 4 and total_planks >= 5:
+            # We have 5+ planks, 2→4 sticks, leaving >=3 for pickaxe
+            if "stick" not in self._recently_crafted:
+                craft_action = AgentAction(agent_name="", action="craft", params={"item": "stick"})
+                logger.debug(f"FAST-PATH: pre-emptive CRAFT sticks (planks={total_planks}, sticks={total_sticks})")
                 logger.debug(f"FAST-PATH: pre-emptive CRAFT {axe_type} (sticks={total_sticks}, planks={total_planks})")
                 logger.debug(f"FAST-PATH: pre-emptive CRAFT sticks (planks={total_planks}, surplus={total_planks-3})")
         
@@ -454,8 +453,10 @@ class ValisAgent:
             return AgentAction(agent_name="", action="collect_items")
 
         if hint == "craft":
-            logger.debug(f"FAST-PATH: craft hint -> returning None for LLM fallback")
-            return None  # Let LLM decide
+            # Pre-emptive craft check already ran above — if nothing was craftable, don't ask LLM.
+            # LLM doesn't know exact inventory and always responds with move_to, wasting cycles.
+            logger.debug(f"FAST-PATH: craft hint but nothing to craft, idling")
+            return AgentAction(agent_name="", action="idle")
 
         if hint in ("move", "explore", "mine", "place"):
             import math
@@ -761,7 +762,7 @@ Respond ONLY with valid JSON:
             elif ticks_since >= 3 and elapsed > 4:
                 logger.warning(f"NAV-STALL: no movement for {ticks_since} ticks ({elapsed:.1f}s) since move_to target=({lmi['target'][0]},{lmi['target'][1]},{lmi['target'][2]}), still at ({cpx:.0f},{cpy:.0f},{cpz:.0f})")
                 # After 8+ ticks of stall, ask LLM for emergency help
-                if ticks_since >= 8 and self._last_move_info:
+                if ticks_since >= 5 and self._last_move_info:
                     # Collect recent failures
                     failures = self.action_awareness.get_recent_discrepancies(n=3)
                     fail_text = "; ".join(failures) if failures else "none"

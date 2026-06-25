@@ -333,6 +333,11 @@ public class ActionExecutor {
 
         try {
             Material mat = Material.valueOf(blockType.toUpperCase());
+            if (!mat.isBlock()) {
+                plugin.getWsBridge().sendActionResult(agent.getAgentName(), "place_block",
+                        false, blockType + " is not a placeable block");
+                return;
+            }
             if (!agent.removeFromInventory(blockType, 1)) {
                 plugin.getWsBridge().sendActionResult(agent.getAgentName(), "place_block",
                         false, "missing " + blockType + " in inventory");
