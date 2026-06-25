@@ -67,7 +67,6 @@ class Reflection:
             insight = await self._synthesize_insight(agent, focal_pt, memories)
             if insight:
                 importance = await agent.memory.score_importance(insight)
-                importance = max(importance, 0.6)
                 await agent.memory.add_thought(
                     content=insight,
                     importance=importance,

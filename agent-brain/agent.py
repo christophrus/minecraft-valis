@@ -143,12 +143,18 @@ class ValisAgent:
         """
         prompt = (
             "On a scale of 1 (mundane) to 10 (critical), rate the poignancy of "
-            "this Minecraft agent memory. Respond with ONLY the number.\n\n"
+            "this Minecraft agent memory. Use the FULL range:\n"
+            "  1-2: Routine, repetitive (e.g. walked forward, looked around)\n"
+            "  3-4: Minor observations (e.g. noticed a tree, picked up item)\n"
+            "  5-6: Useful learning (e.g. found a resource, crafted a tool)\n"
+            "  7-8: Important insight (e.g. discovered a strategy, survived danger)\n"
+            "  9-10: Critical realization (e.g. fundamental strategy change, near-death lesson)\n\n"
+            "Respond with ONLY the number.\n\n"
             f"Memory: \"{content[:300]}\"\n\nRating:"
         )
         try:
             response = await self.llm.chat([
-                {"role": "system", "content": "Rate memory importance. Output only a number 1-10."},
+                {"role": "system", "content": "Rate memory importance 1-10. Use the full range — most routine memories should be 1-4. Output only a number."},
                 {"role": "user", "content": prompt},
             ])
             import re
@@ -1020,10 +1026,12 @@ Respond ONLY with valid JSON:
             # The Generative Agents paper shows planning is critical for believability.
             # Fast-path only for: high priority (danger), pre-emptive crafting, stuck escape.
             action_str = ""
+            _stuck_list = getattr(self, '_stuck_positions', [])
+            _actually_stuck = (len(_stuck_list) >= 5 and len(set(_stuck_list[-5:])) == 1)
             use_fast_path = (
                 decision.priority >= 0.9  # only real emergencies (mob attack, critical danger)
                 or decision.action_hint in ("craft",)  # crafting is deterministic
-                or (hasattr(self, '_stuck_positions') and len(getattr(self, '_stuck_positions', [])) > 0)
+                or _actually_stuck  # only when genuinely stuck at same position for 5+ ticks
             )
             parsed = None
             if use_fast_path:
