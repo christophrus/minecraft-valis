@@ -181,9 +181,12 @@ public class ActionExecutor {
             }
         }
 
-        // Use NPC entity ID as the "breaker" entity for the animation
-        int entityId = agent.getNpc().getEntity().getEntityId();
+        // Make NPC face the block being mined
+        var npcEntity = agent.getNpc().getEntity();
+        int entityId = npcEntity.getEntityId();
         var matName = blockType.name();
+        Location blockCenter = new Location(world, x + 0.5, y + 0.5, z + 0.5);
+        agent.getNpc().faceLocation(blockCenter);
 
         // Play block-breaking animation stages 0-9 over ~1.1 seconds
         new BukkitRunnable() {
@@ -211,11 +214,13 @@ public class ActionExecutor {
                     return;
                 }
 
-                // Send block break animation packet to all nearby players
+                // Arm swing animation — makes the NPC visually swing its arm
+                if (npcEntity instanceof org.bukkit.entity.LivingEntity living) {
+                    living.swingMainHand();
+                }
+
+                // Block crack overlay (stages 0-9)
                 try {
-                    // Build NMS ClientboundBlockDestructionPacket via reflection:
-                    //   new ClientboundBlockDestructionPacket(entityId, BlockPos, progress)
-                    // This bypasses ProtocolLib's field mapping which can fail on JDK 25 with final fields.
                     Class<?> nmsBlockPos = Class.forName("net.minecraft.core.BlockPos");
                     Object nmsPos = nmsBlockPos.getConstructor(int.class, int.class, int.class)
                             .newInstance(x, y, z);
@@ -233,7 +238,7 @@ public class ActionExecutor {
                         }
                     }
                 } catch (Exception e) {
-                    log.warning("Failed to send block break animation packet: " + e.getMessage());
+                    log.warning("Block break animation packet failed: " + e.getMessage());
                 }
 
                 stage++;
