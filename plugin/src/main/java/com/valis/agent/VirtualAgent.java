@@ -35,7 +35,12 @@ public class VirtualAgent {
     private final WorldObserver observer;
     private final ActionExecutor executor;
     private int tickCounter = 0;
-    private final Map<String, Integer> inventory = new HashMap<>();  // material_name -> count
+    private final Map<String, Integer> inventory = new HashMap<>();
+
+    // Chunk loading — NPCs don't trigger chunk loading like players do.
+    // We use Paper's plugin chunk ticket API to keep chunks loaded around the agent.
+    private int[] _lastChunkCenter = null;
+    private java.util.List<int[]> _chunkTickets = null;  // material_name -> count
 
     public VirtualAgent(ValisPlugin plugin, String name, String personality, Location spawn) {
         this.plugin = plugin;
@@ -88,6 +93,7 @@ public class VirtualAgent {
 
     public void despawn() {
         if (perceptionTask != null) perceptionTask.cancel();
+        releaseChunkTickets();
         if (npc != null) { npc.despawn(); npc.destroy(); }
     }
 
@@ -95,9 +101,59 @@ public class VirtualAgent {
         int interval = plugin.getValisConfig().getPerceptionIntervalTicks();
         perceptionTask = plugin.getServer().getScheduler().runTaskTimer(plugin, () -> {
             tickCounter++;
+            // Ensure chunks are loaded — NPCs don't trigger chunk loading like players
+            ensureChunksLoaded();
             JsonObject perception = observer.observe(tickCounter);
             plugin.getWsBridge().sendPerception(name, perception);
         }, 0L, interval);
+    }
+
+    /**
+     * Keep a 3x3 chunk area around the NPC loaded using Paper's chunk ticket API.
+     * Without real players, NPCs can't trigger chunk loading — the world outside
+     * spawn chunks would remain unloaded, breaking perception and navigation.
+     */
+    private void ensureChunksLoaded() {
+        if (npc == null || !npc.isSpawned()) return;
+        var loc = npc.getStoredLocation();
+        if (loc == null || loc.getWorld() == null) return;
+        var world = loc.getWorld();
+
+        int cx = loc.getBlockX() >> 4;
+        int cz = loc.getBlockZ() >> 4;
+
+        // Release old tickets when NPC moves to a new chunk area
+        if (_lastChunkCenter == null || _lastChunkCenter[0] != cx || _lastChunkCenter[1] != cz) {
+            releaseChunkTickets();
+            _lastChunkCenter = new int[]{cx, cz};
+        }
+
+        // Add chunk tickets for 3x3 chunks (48x48 blocks) around the NPC
+        if (_chunkTickets == null) _chunkTickets = new java.util.ArrayList<>();
+        if (_chunkTickets.isEmpty()) {
+            int radius = 1;
+            for (int dx = -radius; dx <= radius; dx++) {
+                for (int dz = -radius; dz <= radius; dz++) {
+                    try {
+                        boolean added = world.addPluginChunkTicket(cx + dx, cz + dz, plugin);
+                        if (added) _chunkTickets.add(new int[]{cx + dx, cz + dz});
+                    } catch (Exception ignored) {}
+                }
+            }
+        }
+    }
+
+    private void releaseChunkTickets() {
+        if (_chunkTickets == null || _chunkTickets.isEmpty()) return;
+        var loc = npc != null ? npc.getStoredLocation() : null;
+        if (loc == null || loc.getWorld() == null) return;
+        var world = loc.getWorld();
+        for (var ticket : _chunkTickets) {
+            try {
+                world.removePluginChunkTicket(ticket[0], ticket[1], plugin);
+            } catch (Exception ignored) {}
+        }
+        _chunkTickets.clear();
     }
 
     public void executeAction(String action, JsonObject params) {
