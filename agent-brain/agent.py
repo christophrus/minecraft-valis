@@ -485,16 +485,37 @@ class ValisAgent:
                     for b in blocks:
                         if b.get("x",0)==px+dx and b.get("y",0)==py+dy and b.get("z",0)==pz+dz:
                             btype = b.get("type","").upper()
-                            if btype not in ("AIR","CAVE_AIR","VOID_AIR","BEDROCK","WATER","LAVA"):
+                            if btype not in ("AIR","CAVE_AIR","VOID_AIR","BEDROCK","WATER","LAVA") \
+                               and "_LEAVES" not in btype and "_LOG" not in btype:
                                 tkey = f"{px+dx},{py+dy},{pz+dz}"
                                 if tkey not in self._recently_mined:
                                     logger.debug(f"FAST-PATH: STUCK-DIG mining {btype} at ({px+dx},{py+dy},{pz+dz}) to escape")
                                     self._recently_mined[tkey] = now
                                     return AgentAction(agent_name="", action="mine_block",
                                                        params={"x": px+dx, "y": py+dy, "z": pz+dz})
-                # If 4 dig attempts found nothing, reset and jump
+                # If 4 dig attempts found nothing useful, try emergency help before random jump
                 if self._stuck_mine_attempts >= 4:
                     self._stuck_mine_attempts = 0
+                    # Collect surroundings for LLM context
+                    nearby = blocks[:12]
+                    surr_text = ", ".join(
+                        f"{b.get('type','?')} at ({b.get('x',0)},{b.get('y',0)},{b.get('z',0)})"
+                        for b in nearby
+                    )[:300]
+                    failures = self.action_awareness.get_recent_discrepancies(n=3) if hasattr(self, 'action_awareness') else []
+                    fail_text = "; ".join(failures) if failures else "none"
+                    # Schedule emergency help — we can't await in _decision_to_action (sync),
+                    # so set a flag for cognitive_tick to pick up on next iteration
+                    self._pending_emergency = {
+                        "type": "STUCK",
+                        "context": {
+                            "position": {"x": px, "y": py, "z": pz},
+                            "description": f"Agent stuck at ({px},{py},{pz}) for 5+ ticks. STUCK-DIG found nothing minable in 4 directions.",
+                            "inventory": inv,
+                            "failures": fail_text,
+                            "surroundings": surr_text,
+                        }
+                    }
                 self._nav_target = None
                 self._explore_heading = None
                 self._explore_steps = 0
@@ -625,6 +646,75 @@ class ValisAgent:
         logger.info(f"Agent {self.name} action result: {result.action} -> {'OK' if result.success else 'FAIL'}: {result.details}")
         self._perception_event.set()  # Wake cognitive loop to process result
 
+    async def _emergency_help(self, problem_type: str, context: dict) -> AgentAction | None:
+        """
+        Ask the LLM for immediate help when the agent is stuck in a problem loop.
+        Sends a concise emergency report and returns the LLM's suggested action.
+
+        Args:
+            problem_type: e.g. 'NAV_STALL', 'REPEAT_FAIL', 'STUCK_CANOPY'
+            context: dict with problem details (position, failures, surroundings, etc.)
+        """
+        import json as _json, re as _re
+
+        # Cooldown: don't spam the LLM
+        if not hasattr(self, '_last_emergency_help'):
+            self._last_emergency_help: float = 0
+        now_ts = __import__('time').time()
+        if now_ts - self._last_emergency_help < 15:
+            logger.debug(f"EMERGENCY-HELP: cooldown active ({now_ts - self._last_emergency_help:.0f}s since last call)")
+            return None
+        self._last_emergency_help = now_ts
+
+        # Build emergency report
+        inv = context.get("inventory", {})
+        inv_text = ", ".join(f"{k}:{v}" for k, v in sorted(inv.items()) if v > 0) if inv else "empty"
+        pos = context.get("position", {})
+        px, py, pz = pos.get("x", 0), pos.get("y", 0), pos.get("z", 0)
+
+        lines = [f"EMERGENCY: Agent {self.name} needs immediate help!",
+                 f"Problem: {problem_type}",
+                 f"Position: ({px}, {py}, {pz})",
+                 f"Description: {context.get('description', 'No details')}",
+                 f"Inventory: {inv_text}"]
+        if context.get("failures"):
+            lines.append(f"Recent failures: {context['failures']}")
+        if context.get("surroundings"):
+            lines.append(f"Surroundings: {context['surroundings']}")
+        if context.get("nav_target"):
+            lines.append(f"Nav target: {context['nav_target']}")
+
+        prompt = "\n".join(lines) + """
+Give ONE specific action to escape this situation immediately.
+Respond ONLY with valid JSON:
+{"action": "mine_block|move_to|place_block|craft|teleport|idle", "params": {"x":int,"y":int,"z":int,...}, "reason": "one sentence why"}"""
+
+        try:
+            response = await self.llm.chat([
+                {"role": "system", "content": "You are an emergency escape advisor for a Minecraft AI agent. The agent is stuck. Give ONE direct action to escape. Be specific with coordinates. Output ONLY JSON."},
+                {"role": "user", "content": prompt},
+            ])
+            json_str = response.strip()
+            json_str = _re.sub(r'^```(?:json)?\s*', '', json_str)
+            json_str = _re.sub(r'\s*```$', '', json_str)
+            brace_start = json_str.find('{')
+            brace_end = json_str.rfind('}')
+            if brace_start >= 0 and brace_end > brace_start:
+                json_str = json_str[brace_start:brace_end + 1]
+            if not json_str:
+                raise ValueError("Empty LLM response")
+
+            data = _json.loads(json_str)
+            action = data.get("action", "idle")
+            params = data.get("params", {})
+            reason = data.get("reason", "")
+
+            logger.info(f"EMERGENCY-HELP: LLM suggests {action} {params} — {reason}")
+            return AgentAction(agent_name="", action=action, params=params)
+        except Exception as e:
+            logger.warning(f"EMERGENCY-HELP: LLM call failed: {e}")
+            return None
+
     async def cognitive_tick(self):
         """
         Run one full cognitive cycle.
@@ -670,8 +760,43 @@ class ValisAgent:
                 self._last_move_info = {}  # Reset tracker on position change
             elif ticks_since >= 3 and elapsed > 4:
                 logger.warning(f"NAV-STALL: no movement for {ticks_since} ticks ({elapsed:.1f}s) since move_to target=({lmi['target'][0]},{lmi['target'][1]},{lmi['target'][2]}), still at ({cpx:.0f},{cpy:.0f},{cpz:.0f})")
+                # After 8+ ticks of stall, ask LLM for emergency help
+                if ticks_since >= 8 and self._last_move_info:
+                    # Collect recent failures
+                    failures = self.action_awareness.get_recent_discrepancies(n=3)
+                    fail_text = "; ".join(failures) if failures else "none"
+                    # Collect surroundings (top 8 blocks near agent)
+                    nearby = perception.nearby_blocks[:12] if perception else []
+                    surr_text = ", ".join(
+                        f"{b.get('type','?')} at ({b.get('x',0)},{b.get('y',0)},{b.get('z',0)})"
+                        for b in nearby
+                    )[:300]
+                    emergency_action = await self._emergency_help("NAV_STALL", {
+                        "position": {"x": cpx, "y": cpy, "z": cpz},
+                        "description": f"Agent hasn't moved from ({cpx:.0f},{cpy:.0f},{cpz:.0f}) for {ticks_since} ticks ({elapsed:.0f}s) while navigating to ({lmi['target'][0]},{lmi['target'][1]},{lmi['target'][2]})",
+                        "inventory": perception.inventory if perception else {},
+                        "failures": fail_text,
+                        "surroundings": surr_text,
+                        "nav_target": f"({lmi['target'][0]},{lmi['target'][1]},{lmi['target'][2]})",
+                    })
+                    if emergency_action:
+                        logger.info(f"EMERGENCY-HELP: overriding action with LLM suggestion: {emergency_action.action} {emergency_action.params}")
+                        action_str = ""
+                        # Reset stall tracking
+                        self._last_move_info = {}
+                        self._nav_target = None
+                        return emergency_action
 
         try:
+            # Step 0: Handle pending emergency from stuck detection (sync→async bridge)
+            if hasattr(self, '_pending_emergency') and self._pending_emergency:
+                emerg = self._pending_emergency
+                self._pending_emergency = None
+                emergency_action = await self._emergency_help(emerg["type"], emerg["context"])
+                if emergency_action:
+                    logger.info(f"EMERGENCY-HELP (stuck): overriding with LLM suggestion: {emergency_action.action} {emergency_action.params}")
+                    return emergency_action
+
             # Step 1: Run Cognitive Controller (PIANO bottleneck)
             decision = await self.controller.decide(self)
             if not self._running:
