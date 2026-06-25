@@ -227,8 +227,6 @@ class ValisAgent:
             if "stick" not in self._recently_crafted:
                 craft_action = AgentAction(agent_name="", action="craft", params={"item": "stick"})
                 logger.debug(f"FAST-PATH: pre-emptive CRAFT sticks (planks={total_planks}, sticks={total_sticks})")
-                logger.debug(f"FAST-PATH: pre-emptive CRAFT {axe_type} (sticks={total_sticks}, planks={total_planks})")
-                logger.debug(f"FAST-PATH: pre-emptive CRAFT sticks (planks={total_planks}, surplus={total_planks-3})")
         
         if craft_action:
             # Track crafted item to prevent duplicate crafts due to inventory lag
@@ -521,14 +519,35 @@ class ValisAgent:
                 self._explore_heading = None
                 self._explore_steps = 0
                 self._stuck_positions = []
-                # Try a random direction away from current position
+                # Track stuck positions to avoid bouncing back to the same area
+                if not hasattr(self, '_stuck_position_history'):
+                    self._stuck_position_history: set[str] = set()
+                if len(self._stuck_position_history) > 30:
+                    self._stuck_position_history.clear()
+                self._stuck_position_history.add(current_pos_key)
+                # Try anti-stuck jump: pick direction furthest from known stuck spots
                 import random as _random
-                dx, dz = _random.choice([(1,0), (-1,0), (0,1), (0,-1)])
-                dist = _random.randint(20, 40)
-                tx, ty, tz = px + dx * dist, py + 3, pz + dz * dist  # aim a bit higher to get out of holes
+                best_target, best_min_dist = None, 0
+                for _ in range(5):
+                    dx, dz = _random.choice([(1,0), (-1,0), (0,1), (0,-1)])
+                    dist = _random.randint(25, 45)
+                    tx, ty, tz = px + dx * dist, py + 3, pz + dz * dist
+                    # Check distance to nearest known stuck position
+                    min_dist = float('inf')
+                    for sp in self._stuck_position_history:
+                        sx, sy, sz = map(int, sp.split(","))
+                        d = ((tx-sx)**2 + (ty-sy)**2 + (tz-sz)**2) ** 0.5
+                        if d < min_dist: min_dist = d
+                    if min_dist > best_min_dist:
+                        best_min_dist = min_dist
+                        best_target = (tx, ty, tz)
+                if best_target is None:
+                    dx, dz = _random.choice([(1,0), (-1,0), (0,1), (0,-1)])
+                    best_target = (px + dx * 35, py + 3, pz + dz * 35)
+                tx, ty, tz = best_target
                 self._nav_target = (tx, ty, tz)
                 self._nav_start = time.time()
-                logger.debug(f"FAST-PATH: anti-stuck jump to ({tx},{ty},{tz})")
+                logger.debug(f"FAST-PATH: anti-stuck jump to ({tx},{ty},{tz}) (avoiding {len(self._stuck_position_history)} known spots)")
                 return AgentAction(agent_name="", action="move_to",
                                    params={"x": tx, "y": ty, "z": tz})
             # Don't interrupt ongoing navigation — idle directly (skip LLM fallback)
@@ -687,12 +706,13 @@ class ValisAgent:
 
         prompt = "\n".join(lines) + """
 Give ONE specific action to escape this situation immediately.
+RULES: Never mine LEAVES or LOGS above you (they don't help escape). Prefer mining blocks at your feet level or teleporting to safe ground (y=63-70 in forest). If stuck in a tree canopy, teleport down.
 Respond ONLY with valid JSON:
 {"action": "mine_block|move_to|place_block|craft|teleport|idle", "params": {"x":int,"y":int,"z":int,...}, "reason": "one sentence why"}"""
 
         try:
             response = await self.llm.chat([
-                {"role": "system", "content": "You are an emergency escape advisor for a Minecraft AI agent. The agent is stuck. Give ONE direct action to escape. Be specific with coordinates. Output ONLY JSON."},
+                {"role": "system", "content": "You are an emergency escape advisor for a Minecraft AI agent. The agent is stuck. Give ONE direct action to escape. NEVER suggest mining leaves or logs — they don't help. Prefer teleporting to solid ground at y=64-70, or mining blocks at the agent's feet. Output ONLY JSON."},
                 {"role": "user", "content": prompt},
             ])
             json_str = response.strip()
