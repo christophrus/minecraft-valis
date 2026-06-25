@@ -406,7 +406,15 @@ class ValisAgent:
                 else:
                     inv = perception.inventory
                     place_mat = "dirt"
-                    if inv:
+                    # Extract block type from intent (e.g. "place crafting_table" → "crafting_table")
+                    intent_block = None
+                    for word in intent.lower().replace(",", " ").split():
+                        if word in inv and word.lower() not in NON_PLACEABLE:
+                            intent_block = word
+                            break
+                    if intent_block and inv.get(intent_block, 0) >= 1:
+                        place_mat = intent_block
+                    elif inv:
                         placeable = {k:v for k,v in inv.items()
                             if k.lower() not in NON_PLACEABLE
                             and k.lower() not in ("air", "cornflower",
@@ -530,8 +538,17 @@ class ValisAgent:
                 logger.warning(f"FAST-PATH: craft→idle deadlock detected ({self._craft_idle_streak}× idle). Clearing craft cooldowns.")
                 self._recently_crafted.clear()
                 self._craft_idle_streak = 0
-                # Re-run pre-emptive craft check with cleared cooldowns
-                return self._decision_to_action(decision, perception)
+                # Direct craft attempt: if we have logs, craft planks regardless of thresholds
+                inv = perception.inventory
+                all_logs = ["oak_log","birch_log","spruce_log","jungle_log","acacia_log","dark_oak_log","cherry_log","mangrove_log"]
+                for log_type in all_logs:
+                    if inv.get(log_type, 0) >= 1:
+                        plank_type = log_type.replace("_log", "_planks")
+                        fail_key = f"craft:{plank_type}"
+                        if fail_key not in self._failed_actions or self._failed_actions[fail_key] < 3:
+                            logger.debug(f"FAST-PATH: deadlock-break crafting {plank_type} from {log_type}")
+                            self._recently_crafted[plank_type] = time.time()
+                            return AgentAction(agent_name="", action="craft", params={"item": plank_type})
             logger.debug(f"FAST-PATH: craft hint but nothing to craft, idling (streak={self._craft_idle_streak})")
             return AgentAction(agent_name="", action="idle")
 
@@ -633,7 +650,7 @@ class ValisAgent:
             if hint == "mine":
                 # Find the closest minable block within 4 blocks
                 minable = [b for b in blocks
-                          if b.get("type","").upper() not in ("AIR","CAVE_AIR","VOID_AIR","BEDROCK","WATER","LAVA")
+                          if b.get("type","").upper() not in ("AIR","CAVE_AIR","VOID_AIR","BEDROCK","WATER","LAVA","CRAFTING_TABLE")
                           and "_LEAVES" not in b.get("type","").upper()
                           and pos_key(b) not in self._recently_mined]
                 close_minable = [b for b in minable
@@ -682,12 +699,18 @@ class ValisAgent:
                 return AgentAction(agent_name="", action="mine_block",
                     params={"x": int(t.get("x",px)), "y": int(t.get("y",py-1)), "z": int(t.get("z",pz))})
             if leaves_nearby and not wood_nearby:
-                t = min(leaves_nearby, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
-                logger.debug(f"FAST-PATH: leaves spotted at ({t.get('x')},{t.get('y')},{t.get('z')}), navigating closer")
-                self._nav_target = (t.get("x",px), t.get("y",py), t.get("z",pz))
-                self._nav_start = time.time()
-                return AgentAction(agent_name="", action="move_to",
-                    params={"x": int(t.get("x",px)), "y": int(t.get("y",py)), "z": int(t.get("z",pz))})
+                # Don't interrupt long-distance navigation for nearby leaves
+                nav_dist = 0
+                if hasattr(self, '_nav_target') and self._nav_target:
+                    ntx, nty, ntz = self._nav_target
+                    nav_dist = math.sqrt((px - ntx)**2 + (py - nty)**2 + (pz - ntz)**2)
+                if nav_dist < 5:
+                    t = min(leaves_nearby, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
+                    logger.debug(f"FAST-PATH: leaves spotted at ({t.get('x')},{t.get('y')},{t.get('z')}), navigating closer")
+                    self._nav_target = (t.get("x",px), t.get("y",py), t.get("z",pz))
+                    self._nav_start = time.time()
+                    return AgentAction(agent_name="", action="move_to",
+                        params={"x": int(t.get("x",px)), "y": int(t.get("y",py)), "z": int(t.get("z",pz))})
             
             # Priority 3: Plan coordinates (skip if forest nearby and we need wood)
             nb = perception.nearby_biomes
@@ -760,6 +783,14 @@ class ValisAgent:
         if record and record.discrepancy:
             await self.action_awareness.learn_from_discrepancy(self, record)
             logger.info(f"Agent {self.name} learned: {record.discrepancy}")
+
+        # On successful mine, immediately mark coordinates as mined to prevent re-mining
+        if result.success and result.action == "mine_block" and result.details:
+            import re as _re_mine
+            coord_match = _re_mine.search(r'at (\d+),(\d+),(\d+)', result.details)
+            if coord_match:
+                mkey = f"{coord_match.group(1)},{coord_match.group(2)},{coord_match.group(3)}"
+                self._recently_mined[mkey] = __import__('time').time()
 
         # Track repeated failures to avoid retrying the same broken action
         if not result.success:

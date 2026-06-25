@@ -132,8 +132,16 @@ public class ActionExecutor {
                     break;
                 }
             }
-            // Enable water navigation
-            npc.getNavigator().getLocalParameters().avoidWater(false);
+            // Cancel any existing navigation first
+            if (npc.getNavigator().isNavigating()) {
+                npc.getNavigator().cancelNavigation();
+            }
+            var navParams = npc.getNavigator().getLocalParameters();
+            navParams.avoidWater(false);
+            navParams.range(100);
+            navParams.distanceMargin(1.5);
+            navParams.stuckAction(net.citizensnpcs.api.ai.TeleportStuckAction.INSTANCE);
+            navParams.stationaryTicks(60);
             npc.getNavigator().setTarget(target);
             plugin.getWsBridge().sendActionResult(agent.getAgentName(), "move_to",
                     true, "navigating to " + x + "," + target.getBlockY() + "," + z);

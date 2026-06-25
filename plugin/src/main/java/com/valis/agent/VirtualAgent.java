@@ -103,9 +103,24 @@ public class VirtualAgent {
             tickCounter++;
             // Ensure chunks are loaded — NPCs don't trigger chunk loading like players
             ensureChunksLoaded();
+            // Passive item pickup — NPCs don't pick up items like players do
+            passiveItemPickup();
             JsonObject perception = observer.observe(tickCounter);
             plugin.getWsBridge().sendPerception(name, perception);
         }, 0L, interval);
+    }
+
+    private void passiveItemPickup() {
+        if (npc == null || !npc.isSpawned()) return;
+        var loc = npc.getStoredLocation();
+        if (loc == null || loc.getWorld() == null) return;
+        for (org.bukkit.entity.Entity entity : loc.getWorld().getNearbyEntities(loc, 2, 2, 2)) {
+            if (entity instanceof org.bukkit.entity.Item item && !item.isDead()) {
+                var stack = item.getItemStack();
+                addToInventory(stack.getType(), stack.getAmount());
+                item.remove();
+            }
+        }
     }
 
     /**
