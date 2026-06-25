@@ -103,6 +103,24 @@ class PerceptionProcessor:
         else:
             lines.append("Inventory: empty.")
 
+        # Craftable items (computed server-side from Bukkit recipes)
+        if p.craftable:
+            craft_strs = []
+            for c in p.craftable[:10]:
+                item = c.get("item", "?")
+                amt = c.get("amount", 1)
+                cost = c.get("cost", "?")
+                craft_strs.append(f"{amt}x {item} (costs: {cost})")
+            lines.append(f"CAN CRAFT NOW: {' | '.join(craft_strs)}.")
+
+        if p.almost_craftable:
+            almost_strs = []
+            for c in p.almost_craftable[:5]:
+                item = c.get("item", "?")
+                missing = c.get("missing", "?")
+                almost_strs.append(f"{item} (need: {missing})")
+            lines.append(f"ALMOST CRAFTABLE (missing materials): {' | '.join(almost_strs)}.")
+
         return "\n".join(lines)
 
     def get_surroundings_summary(self) -> dict[str, Any]:

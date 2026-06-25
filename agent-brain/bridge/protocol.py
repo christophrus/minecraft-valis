@@ -27,9 +27,12 @@ class PerceptionData:
     inventory: dict[str, int] = field(default_factory=dict)  # material_name -> count
     biome: str = "plains"
     nearby_biomes: dict[str, str] = field(default_factory=dict)  # {"north": "forest", ...}
+    craftable: list[dict[str, Any]] = field(default_factory=list)  # [{item, amount, cost}, ...]
+    almost_craftable: list[dict[str, Any]] = field(default_factory=list)  # [{item, amount, missing}, ...]
 
     @classmethod
     def from_json(cls, data: dict) -> "PerceptionData":
+        craft_data = data.get("craftable", {})
         return cls(
             agent_name=data.get("agent_name", ""),
             tick=data.get("tick", 0),
@@ -43,6 +46,8 @@ class PerceptionData:
             inventory=data.get("inventory", {}),
             biome=data.get("biome", "plains"),
             nearby_biomes=data.get("nearby_biomes", {}),
+            craftable=craft_data.get("can_craft", []) if isinstance(craft_data, dict) else [],
+            almost_craftable=craft_data.get("almost", []) if isinstance(craft_data, dict) else [],
         )
 
 

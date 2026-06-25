@@ -190,6 +190,19 @@ Format:
                 f"  - {d}" for d in discrepancies
             )
 
+        # Craftable items from server
+        perception = agent._pending_perception
+        craft_text = ""
+        if perception and perception.craftable:
+            items = [f"{c.get('amount',1)}x {c.get('item','?')} (costs: {c.get('cost','?')})"
+                     for c in perception.craftable[:8]]
+            craft_text = "CAN CRAFT NOW: " + " | ".join(items)
+        almost_text = ""
+        if perception and perception.almost_craftable:
+            items = [f"{c.get('item','?')} (need: {c.get('missing','?')})"
+                     for c in perception.almost_craftable[:5]]
+            almost_text = "ALMOST CRAFTABLE: " + " | ".join(items)
+
         prompt = f"""You are {agent.name} in Minecraft. You must choose ONE action to perform right now.
 
 Current situation:
@@ -202,6 +215,9 @@ Current task: {self.current_task}
 
 Inventory: {inv_text}
 
+{craft_text}
+{almost_text}
+
 Relevant memories:
 {memory_text}
 
@@ -211,14 +227,13 @@ Available actions:
 - move_to(x, y, z): Walk to coordinates
 - mine_block(x, y, z): Mine the block at given position — use exact coordinates from "Nearby blocks" above!
 - place_block(block_type, x, y, z): Place a block
-- craft(item): Craft an item using your inventory. You know standard Minecraft recipes — use exact item names (e.g., oak_planks, stick, crafting_table, wooden_pickaxe). If crafting fails, the system will tell you what's missing.
+- craft(item): Craft an item — ONLY items listed in "CAN CRAFT NOW". Use exact item names.
 - look_at(x, y, z): Look at a position
 - chat(message): Send a chat message
 - idle: Do nothing this tick
 
-IMPORTANT: If you have wood logs, craft planks first, then sticks, then tools.
-If your task involves gathering resources, use mine_block with the exact coordinates shown under "Nearby blocks".
-If the block you need is not nearby, use move_to to explore.
+IMPORTANT: Only craft items shown in CAN CRAFT NOW. To get missing materials, mine or gather what ALMOST CRAFTABLE shows.
+Use mine_block with exact coordinates from "Nearby blocks". If the block you need is not nearby, use move_to to explore.
 
 Respond with exactly ONE action in format: action_name(param1=value1, param2=value2, ...)"""
 

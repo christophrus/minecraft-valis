@@ -105,12 +105,28 @@ class CognitiveController:
                 f"  - {d}" for d in discrepancies
             )
 
+        # Craftable items (computed server-side from Bukkit recipes)
+        craft_text = ""
+        perception = agent._pending_perception
+        if perception and perception.craftable:
+            items = [f"{c.get('amount',1)}x {c.get('item','?')} ({c.get('cost','?')})"
+                     for c in perception.craftable[:8]]
+            craft_text = "CAN CRAFT NOW: " + " | ".join(items)
+        almost_text = ""
+        if perception and perception.almost_craftable:
+            items = [f"{c.get('item','?')} (need: {c.get('missing','?')})"
+                     for c in perception.almost_craftable[:5]]
+            almost_text = "ALMOST CRAFTABLE: " + " | ".join(items)
+
         prompt = f"""You control {agent.name}, an AI in Minecraft. Pick ONE action. Be concise — output ONLY JSON, max 300 chars.
 
 INVENTORY: {inv_text}
 
 PERCEPTION:
 {perception_text}
+
+{craft_text}
+{almost_text}
 
 PLAN: {plan_text}
 GOALS: {goal_text}
@@ -124,7 +140,8 @@ RELEVANT MEMORIES (weighted by importance+recency+relevance):
 
 action_hint choices: mine|craft|place|move|explore|hunt|socialize|rest
 
-RECIPES (for reference): log→4 planks | 4 planks→crafting_table | 2 planks→4 sticks | 3 planks+2 sticks→wooden_pickaxe | 3 cobble+2 sticks→stone_pickaxe (needs crafting_table) | 8 cobble→furnace (needs crafting_table) | 6 planks→2 doors
+To craft: use action_hint "craft" and specify the item name in intent. Only craft items listed in CAN CRAFT NOW.
+To get missing materials: mine or gather what ALMOST CRAFTABLE shows.
 
 Output ONLY JSON:
 {{"intent": "what and where", "reason": "why (1 sentence)", "priority": 0-10, "action_hint": "mine|craft|...", "chat_hint": ""}}"""

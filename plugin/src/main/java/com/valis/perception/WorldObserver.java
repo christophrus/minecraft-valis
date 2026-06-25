@@ -5,12 +5,20 @@ import com.google.gson.JsonObject;
 import com.valis.ValisPlugin;
 import com.valis.agent.VirtualAgent;
 import net.citizensnpcs.api.npc.NPC;
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.RecipeChoice;
+import org.bukkit.inventory.ShapedRecipe;
+import org.bukkit.inventory.ShapelessRecipe;
+
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Observes the world around an agent and builds a structured perception report.
@@ -83,7 +91,155 @@ public class WorldObserver {
         report.addProperty("health", 20);
         report.add("inventory", agent.inventoryToJson());
 
+        // Craftable items analysis
+        report.add("craftable", observeCraftable());
+
         return report;
+    }
+
+    private static final Material[] RELEVANT_ITEMS = {
+        Material.OAK_PLANKS, Material.BIRCH_PLANKS, Material.SPRUCE_PLANKS,
+        Material.JUNGLE_PLANKS, Material.ACACIA_PLANKS, Material.DARK_OAK_PLANKS,
+        Material.CHERRY_PLANKS, Material.MANGROVE_PLANKS,
+        Material.STICK, Material.CRAFTING_TABLE,
+        Material.WOODEN_PICKAXE, Material.WOODEN_AXE, Material.WOODEN_SHOVEL, Material.WOODEN_SWORD,
+        Material.STONE_PICKAXE, Material.STONE_AXE, Material.STONE_SHOVEL, Material.STONE_SWORD,
+        Material.IRON_PICKAXE, Material.IRON_AXE, Material.IRON_SHOVEL, Material.IRON_SWORD,
+        Material.FURNACE, Material.CHEST, Material.TORCH,
+        Material.OAK_DOOR, Material.BIRCH_DOOR, Material.SPRUCE_DOOR,
+        Material.WOODEN_HOE, Material.STONE_HOE, Material.IRON_HOE,
+        Material.SHIELD, Material.BUCKET, Material.SHEARS,
+        Material.LADDER, Material.OAK_FENCE, Material.OAK_BOAT,
+        Material.BOW, Material.ARROW, Material.BREAD,
+    };
+
+    /**
+     * Analyze which items the agent can craft with its current inventory.
+     * Returns JSON with "can_craft" (have all materials) and "almost" (missing 1-2 items).
+     */
+    private JsonObject observeCraftable() {
+        JsonObject result = new JsonObject();
+        JsonArray canCraft = new JsonArray();
+        JsonArray almost = new JsonArray();
+        Map<String, Integer> inv = agent.getInventory();
+
+        for (Material target : RELEVANT_ITEMS) {
+            var recipes = Bukkit.getRecipesFor(new ItemStack(target));
+            for (var recipe : recipes) {
+                Map<String, Integer> needed = new HashMap<>();
+                boolean parsed = false;
+
+                if (recipe instanceof ShapedRecipe shaped) {
+                    parsed = parseShapedRecipe(shaped, inv, needed);
+                } else if (recipe instanceof ShapelessRecipe shapeless) {
+                    parsed = parseShapelessRecipe(shapeless, inv, needed);
+                }
+                if (!parsed || needed.isEmpty()) continue;
+
+                int resultAmount = recipe.getResult().getAmount();
+                Map<String, Integer> missing = new HashMap<>();
+                for (var entry : needed.entrySet()) {
+                    int has = inv.getOrDefault(entry.getKey(), 0);
+                    if (has < entry.getValue()) {
+                        missing.put(entry.getKey(), entry.getValue() - has);
+                    }
+                }
+
+                if (missing.isEmpty()) {
+                    JsonObject item = new JsonObject();
+                    item.addProperty("item", target.name().toLowerCase());
+                    item.addProperty("amount", resultAmount);
+                    StringBuilder cost = new StringBuilder();
+                    for (var entry : needed.entrySet()) {
+                        if (!cost.isEmpty()) cost.append(" + ");
+                        cost.append(entry.getValue()).append(" ").append(entry.getKey());
+                    }
+                    item.addProperty("cost", cost.toString());
+                    canCraft.add(item);
+                    break;
+                } else if (missing.size() <= 2) {
+                    int totalMissing = missing.values().stream().mapToInt(Integer::intValue).sum();
+                    if (totalMissing <= 4) {
+                        JsonObject item = new JsonObject();
+                        item.addProperty("item", target.name().toLowerCase());
+                        item.addProperty("amount", resultAmount);
+                        StringBuilder missingStr = new StringBuilder();
+                        for (var entry : missing.entrySet()) {
+                            if (!missingStr.isEmpty()) missingStr.append(" + ");
+                            missingStr.append(entry.getValue()).append(" ").append(entry.getKey());
+                        }
+                        item.addProperty("missing", missingStr.toString());
+                        almost.add(item);
+                        break;
+                    }
+                }
+            }
+        }
+        result.add("can_craft", canCraft);
+        result.add("almost", almost);
+        return result;
+    }
+
+    private boolean parseShapedRecipe(ShapedRecipe shaped, Map<String, Integer> inv,
+                                       Map<String, Integer> needed) {
+        var choices = shaped.getChoiceMap();
+        for (var entry : choices.entrySet()) {
+            var choice = entry.getValue();
+            if (choice == null) continue;
+            String matched = matchChoice(choice, inv, needed);
+            if (matched == null) {
+                matched = matchChoiceAny(choice);
+            }
+            if (matched == null) return false;
+            needed.merge(matched, 1, Integer::sum);
+        }
+        return true;
+    }
+
+    private boolean parseShapelessRecipe(ShapelessRecipe shapeless, Map<String, Integer> inv,
+                                          Map<String, Integer> needed) {
+        for (var choice : shapeless.getChoiceList()) {
+            String matched = matchChoice(choice, inv, needed);
+            if (matched == null) {
+                matched = matchChoiceAny(choice);
+            }
+            if (matched == null) return false;
+            needed.merge(matched, 1, Integer::sum);
+        }
+        return true;
+    }
+
+    private String matchChoice(RecipeChoice choice, Map<String, Integer> inv,
+                                Map<String, Integer> currentNeeded) {
+        if (choice instanceof RecipeChoice.MaterialChoice matChoice) {
+            for (Material mat : matChoice.getChoices()) {
+                String name = mat.name().toLowerCase();
+                int alreadyNeeded = currentNeeded.getOrDefault(name, 0);
+                if (inv.getOrDefault(name, 0) > alreadyNeeded) {
+                    return name;
+                }
+            }
+        } else if (choice instanceof RecipeChoice.ExactChoice exact) {
+            for (var stack : exact.getChoices()) {
+                String name = stack.getType().name().toLowerCase();
+                int alreadyNeeded = currentNeeded.getOrDefault(name, 0);
+                if (inv.getOrDefault(name, 0) > alreadyNeeded) {
+                    return name;
+                }
+            }
+        }
+        return null;
+    }
+
+    private String matchChoiceAny(RecipeChoice choice) {
+        if (choice instanceof RecipeChoice.MaterialChoice matChoice) {
+            var choices = matChoice.getChoices();
+            return choices.isEmpty() ? null : choices.get(0).name().toLowerCase();
+        } else if (choice instanceof RecipeChoice.ExactChoice exact) {
+            var choices = exact.getChoices();
+            return choices.isEmpty() ? null : choices.get(0).getType().name().toLowerCase();
+        }
+        return null;
     }
 
     /**
