@@ -86,6 +86,7 @@ class ValisAgent:
             agent_name=config.name,
             data_dir=config.data_dir,
             embedding_fn=self.llm.embed,
+            importance_fn=self._score_importance_llm,
         )
         self.retrieval = MemoryRetrieval(self.memory)
 
@@ -133,6 +134,31 @@ class ValisAgent:
         self._running = False
         self._perception_event.set()  # Unblock any waiting
         logger.info(f"Agent {self.name} stopped.")
+
+    async def _score_importance_llm(self, content: str) -> float:
+        """Score memory importance (poignancy) on a 0-1 scale via LLM.
+
+        Based on the Generative Agents paper: the LLM rates each memory on a
+        1-10 poignancy scale. We normalize to 0-1.
+        """
+        prompt = (
+            "On a scale of 1 (mundane) to 10 (critical), rate the poignancy of "
+            "this Minecraft agent memory. Respond with ONLY the number.\n\n"
+            f"Memory: \"{content[:300]}\"\n\nRating:"
+        )
+        try:
+            response = await self.llm.chat([
+                {"role": "system", "content": "Rate memory importance. Output only a number 1-10."},
+                {"role": "user", "content": prompt},
+            ])
+            import re
+            match = re.search(r'(\d+)', response.strip())
+            if match:
+                raw = int(match.group(1))
+                return max(0.1, min(1.0, raw / 10.0))
+        except Exception as e:
+            logger.warning(f"Importance scoring LLM failed: {e}")
+        return 0.5
 
     def _decision_to_action(self, decision, perception: PerceptionData) -> AgentAction | None:
         """Convert controller decision to an action.
@@ -990,55 +1016,33 @@ Respond ONLY with valid JSON:
                 if not self._running:
                     return
 
-            # Step 4: Convert controller decision directly to action (fast path)
+            # Step 4: Decide action — LLM-first with fast-path only for emergencies/crafting
+            # The Generative Agents paper shows planning is critical for believability.
+            # Fast-path only for: high priority (danger), pre-emptive crafting, stuck escape.
             action_str = ""
-            parsed = self._decision_to_action(decision, perception)
+            use_fast_path = (
+                decision.priority >= 0.7  # urgent (mob attack, night, danger)
+                or decision.action_hint in ("craft",)  # crafting is deterministic
+                or (hasattr(self, '_stuck_positions') and len(getattr(self, '_stuck_positions', [])) > 0)
+            )
+            parsed = None
+            if use_fast_path:
+                parsed = self._decision_to_action(decision, perception)
+                if parsed:
+                    logger.debug(f"FAST-PATH: priority={decision.priority:.2f} hint={decision.action_hint} → {parsed.action}")
+
             if parsed is None:
-                # Fallback: LLM action decision for complex cases
-                logger.debug(f"FALLBACK: fast-path returned None, calling planner.decide_action()...")
+                # Primary path: LLM action decision informed by plan + retrieval
+                logger.debug(f"LLM-PATH: calling planner.decide_action() (priority={decision.priority:.2f}, hint={decision.action_hint})")
                 action_str = await self.planner.decide_action(self)
-                logger.debug(f"FALLBACK: LLM returned '{action_str[:200]}'")
+                logger.debug(f"LLM-PATH: returned '{action_str[:200]}'")
                 if not self._running:
                     return
                 parsed = self.executor.parse_action(action_str)
-                # If LLM returned empty/unparseable, use heuristic fallback instead of idle
+                # If LLM returned unparseable, fall back to fast-path heuristics
                 if parsed is None or parsed.action == "idle":
-                    import random as _random
-                    inv = perception.inventory
-                    all_logs = ("oak_log","birch_log","spruce_log","jungle_log","acacia_log",
-                                "dark_oak_log","cherry_log","mangrove_log")
-                    all_planks = ("oak_planks","birch_planks","spruce_planks","jungle_planks",
-                                  "acacia_planks","dark_oak_planks","cherry_planks","mangrove_planks")
-                    total_logs = sum(inv.get(lt, 0) for lt in all_logs)
-                    total_planks = sum(inv.get(pt, 0) for pt in all_planks)
-                    total_sticks = inv.get("stick", 0)
-                    has_pickaxe = any("pickaxe" in k.lower() for k in inv)
-                    
-                    def _find_best(key_list):
-                        best, best_count = None, 0
-                        for k in key_list:
-                            c = inv.get(k, 0)
-                            if c > best_count:
-                                best, best_count = k, c
-                        return best
-                    
-                    if total_logs >= 1 and total_planks < 4:
-                        best_log = _find_best(all_logs)
-                        plank_type = best_log.replace("_log", "_planks") if best_log else "oak_planks"
-                        logger.debug(f"FALLBACK-HEURISTIC: crafting planks ({best_log}={inv.get(best_log,0)})")
-                        parsed = AgentAction(agent_name="", action="craft", params={"item": plank_type})
-                    # Pickaxe BEFORE sticks — reserve 3 planks for pickaxe
-                    elif total_sticks >= 2 and total_planks >= 3 and not has_pickaxe:
-                        pickaxe_type = "wooden_pickaxe"
-                        if inv.get("cobblestone", 0) >= 3:
-                            pickaxe_type = "stone_pickaxe"
-                        logger.debug(f"FALLBACK-HEURISTIC: crafting {pickaxe_type}")
-                        parsed = AgentAction(agent_name="", action="craft", params={"item": pickaxe_type})
-                    elif total_planks >= 5 and total_sticks < 4:
-                        logger.debug(f"FALLBACK-HEURISTIC: crafting sticks (planks={total_planks})")
-                        parsed = AgentAction(agent_name="", action="craft", params={"item": "stick"})
-                    else:
-                        logger.debug(f"FALLBACK-HEURISTIC: nothing to craft, staying idle")
+                    logger.debug(f"LLM-PATH: unparseable/idle, trying fast-path fallback")
+                    parsed = self._decision_to_action(decision, perception)
 
             # Warn if agent position jumped to spawn (Citizens pathfinder bug)
             if perception and parsed and parsed.action == "move_to":
@@ -1099,11 +1103,11 @@ Respond ONLY with valid JSON:
             if self.reflection.should_reflect():
                 await self.reflection.reflect(self)
 
-            # Step 8: Store event in memory
+            # Step 8: Store event in memory (importance scored via LLM)
+            action_desc = f"{parsed.action} {parsed.params}" if parsed else "idle"
             context = self.perception_processor.build_context_text()
             await self.memory.add_event(
-                content=f"[Tick {self.tick_count}] At {context[:200]}",
-                importance=importance / 10.0,
+                content=f"[Tick {self.tick_count}] {action_desc}. Context: {context[:150]}",
             )
 
         except Exception as e:

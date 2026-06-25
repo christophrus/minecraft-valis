@@ -27,7 +27,7 @@ class Reflection:
 
     def __init__(self):
         self.importance_counter: float = 0.0
-        self.importance_threshold: float = 30.0  # Trigger after ~10 priority-3 decisions
+        self.importance_threshold: float = 50.0  # ~10 high-priority decisions
         self.reflection_count: int = 0
         self.last_reflection_time: float = 0.0
 
@@ -41,54 +41,76 @@ class Reflection:
 
     async def reflect(self, agent: "ValisAgent"):
         """
-        Run the full reflection cycle:
-        1. Generate focal points from recent events
-        2. Retrieve relevant memories
-        3. Synthesize insights
-        4. Store reflections in memory
+        Run the full reflection cycle (Generative Agents paper):
+        1. Generate focal points via LLM from recent high-importance events
+        2. Retrieve relevant memories using weighted retrieval
+        3. Synthesize insights via LLM
+        4. Store reflections with scored importance — these feed back into
+           future retrieval and controller decisions as "thought" nodes
         """
         logger.info(f"Agent {agent.name} reflecting (count: {self.reflection_count + 1})")
 
-        # Get recent events as focal points
         recent_events = agent.memory.get_recent(n=20, node_type="event")
         if len(recent_events) < 3:
             self.importance_counter = 0
             return
 
-        # Build 3 focal points from recent events
-        focal_points = self._generate_focal_points(agent, recent_events)
+        focal_points = await self._generate_focal_points_llm(agent, recent_events)
 
         for focal_pt in focal_points:
-            # Retrieve memories related to this focal point
-            memories = await agent.retrieval.retrieve(focal_pt, limit=5)
-
+            memories = await agent.retrieval.retrieve(
+                focal_pt, limit=5, embedding_fn=agent.llm.embed,
+            )
             if not memories:
                 continue
 
-            # Synthesize insight
             insight = await self._synthesize_insight(agent, focal_pt, memories)
-
             if insight:
+                importance = await agent.memory.score_importance(insight)
+                importance = max(importance, 0.6)
                 await agent.memory.add_thought(
                     content=insight,
-                    importance=0.7,
+                    importance=importance,
                     evidence_ids=[m.node_id for m in memories],
                 )
+                logger.info(f"REFLECTION: stored insight (imp={importance:.2f}): {insight[:100]}")
 
-        # Reset counter
         self.importance_counter = 0
         self.reflection_count += 1
         import time
         self.last_reflection_time = time.time()
 
-    def _generate_focal_points(
+    async def _generate_focal_points_llm(
         self,
         agent: "ValisAgent",
         recent_events: list,
     ) -> list[str]:
-        """Generate reflection focal points from recent events."""
-        # Simple approach: group events by type and pick top-3 most important
+        """Generate reflection focal points via LLM from high-importance events."""
         events_sorted = sorted(recent_events, key=lambda e: e.importance, reverse=True)
+        event_text = "\n".join(
+            f"- (imp={e.importance:.1f}) {e.content[:120]}" for e in events_sorted[:10]
+        )
+
+        prompt = (
+            f"Given these recent experiences of {agent.name} in Minecraft, "
+            f"generate exactly 3 questions worth reflecting on. "
+            f"Focus on patterns, lessons, and strategies.\n\n"
+            f"Recent events:\n{event_text}\n\n"
+            f"Output exactly 3 questions, one per line:"
+        )
+        try:
+            response = await agent.llm.chat([
+                {"role": "system", "content": "Generate reflection questions. Output 3 questions, one per line."},
+                {"role": "user", "content": prompt},
+            ])
+            questions = [
+                q.strip().lstrip("0123456789.-) ") for q in response.strip().split("\n")
+                if q.strip() and len(q.strip()) > 10
+            ]
+            if questions:
+                return questions[:3]
+        except Exception as e:
+            logger.warning(f"LLM focal point generation failed: {e}")
 
         focal_points = []
         for event in events_sorted[:5]:

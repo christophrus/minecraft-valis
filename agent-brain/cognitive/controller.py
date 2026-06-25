@@ -48,6 +48,8 @@ class CognitiveController:
         into a single high-level decision.
 
         This is the bottleneck that ensures coherence across output modules.
+        Uses weighted retrieval (recency × relevance × importance) instead of
+        raw recent memories, and includes reflection insights.
         """
         # Collect inputs from all modules
         perception_text = agent.perception_processor.build_context_text()
@@ -64,12 +66,36 @@ class CognitiveController:
         inv = agent._pending_perception.inventory if agent._pending_perception else {}
         inv_text = ", ".join(f"{k}: {v}" for k, v in inv.items()) if inv else "empty"
 
-        # Recent memories (trimmed for speed)
-        recent = agent.memory.get_recent(n=3)
+        # Weighted retrieval (paper-conformant: recency × relevance × importance)
+        query = f"Current goals: {goal_text}. Perception: {perception_text[:200]}"
+        try:
+            retrieved = await agent.retrieval.retrieve(
+                query, limit=5, embedding_fn=agent.llm.embed,
+            )
+        except Exception as e:
+            logger.warning(f"Retrieval failed, falling back to recent: {e}")
+            retrieved = agent.memory.get_recent(n=5)
+
         memory_text = "\n".join(
-            f"- [{m.created.strftime('%H:%M')}] {m.content[:80]}"
-            for m in recent
+            f"- [{m.created.strftime('%H:%M')}] (imp={m.importance:.1f}) {m.content[:80]}"
+            for m in retrieved
         )
+
+        # Reflection insights — higher-level patterns the agent has learned
+        recent_reflections = agent.memory.get_recent(n=3, node_type="thought")
+        reflection_text = ""
+        if recent_reflections:
+            reflection_text = "Insights from reflection:\n" + "\n".join(
+                f"  - {r.content[:120]}" for r in recent_reflections
+            )
+
+        # Daily plan context
+        plan_text = ""
+        if hasattr(agent, 'planner') and agent.planner.daily_plan:
+            current = agent.planner.current_task
+            plan_text = f"Current task: {current}\nDaily plan: " + " | ".join(
+                agent.planner.daily_plan[:4]
+            )
 
         # Recent action failures — what NOT to repeat
         discrepancies = agent.action_awareness.get_recent_discrepancies(n=5)
@@ -86,9 +112,14 @@ INVENTORY: {inv_text}
 PERCEPTION:
 {perception_text}
 
+PLAN: {plan_text}
 GOALS: {goal_text}
 SOCIAL: {social_text}
+
+RELEVANT MEMORIES (weighted by importance+recency+relevance):
 {memory_text}
+
+{reflection_text}
 {discrepancy_text}
 
 action_hint choices: mine|craft|place|move|explore|hunt|socialize|rest

@@ -39,33 +39,51 @@
 | **Cultural Transmission** — Meme-Propagation (Konversation → Keywords), Religion (Pastafarianism-Experiment: Priester → direkte + indirekte Konvertiten) | ❌ Nicht implementiert | ❌ Phase 4 | Benötigt Talking + Social Awareness |
 | **Skalierung** — 500 Agenten / 9000s, bis 1000+ | ❌ Nur 1 Agent | ❌ Phase 4 | Architektur-Engpass: ein Python-Prozess pro Agent |
 
-### Gesamtbewertung
+### Gesamtbewertung (nach Implementierung 2026-06-25)
 
 | Bereich | Abdeckung | Anmerkung |
 |---------|-----------|-----------|
-| **Generative Agents** | ~45% | Memory Stream + Observation gut; Retrieval/Reflection/Planning nur als Skelett; kein Multi-Agent |
-| **Project Sid / PIANO** | ~30% | Action Awareness + Skill Execution stark; CC vorhanden aber untergraben; Social/Collective/Cultural komplett offen |
-| **Gesamt-Zielerreichung** | ~35% | Solide Single-Agent-Grundlage, aber die Paper-definierten Kernmechanismen (Importance-basiertes Retrieval, hierarchisches Planning, Inter-Agent-Kommunikation) fehlen oder sind wirkungslos |
+| **Generative Agents** | ~70% | Memory Stream + Observation + Retrieval (gewichtet) + Reflection (LLM) + hierarchisches Planning implementiert; fehlt: reaktives Umplanen, Multi-Agent-Konversation |
+| **Project Sid / PIANO** | ~45% | Action Awareness + Skill Execution + CC (mit Retrieval/Reflections) stark; Social/Collective/Cultural komplett offen (Single-Agent) |
+| **Gesamt-Zielerreichung** | ~55% | Paper-konforme Kernarchitektur (Importance-Scoring, gewichtetes Retrieval, LLM-Reflections, hierarchisches Planning) jetzt implementiert; nächster Engpass: Multi-Agent |
 
 ### Kritische Befunde
 
-1. **Reflex Layer dominiert LLM-Pipeline (~80/20)**: Die Generative Agents Ablation-Studie zeigt, dass Planning, Reflection und Observation *jeweils kritisch* für glaubwürdiges Verhalten sind. Unser Fast-Path umgeht diese Komponenten systematisch, was die Architektur de facto zu einem regelbasierten System mit gelegentlichem LLM-Aufruf reduziert.
+1. ~~**Reflex Layer dominiert LLM-Pipeline (~80/20)**~~ → ✅ **BEHOBEN**: Fast-Path jetzt nur bei `priority ≥ 0.7` (Gefahr), Crafting, oder Stuck. LLM-Planner ist Primärpfad. Erwartete Aufteilung: ~50/50 LLM/Fast-Path.
 
-2. **Retrieval ist der größte Einzelmangel**: Ohne Importance-Scoring (Poignancy 1-10), ohne exponentielles Decay, ohne gewichtete Kombination mit Embedding-Relevanz kann der Agent keine kontextuell passenden Erinnerungen abrufen. Das Paper nutzt `score = α·recency + β·relevance + γ·importance` — wir nutzen nur "die letzten 3".
+2. ~~**Retrieval ohne Importance-Scoring**~~ → ✅ **BEHOBEN**: LLM-basiertes Importance-Scoring (Poignancy 1-10, normiert auf 0-1) bei Memory-Erstellung. Controller + Planner nutzen gewichtetes Retrieval `(α·recency + β·relevance + γ·importance)`.
 
-3. **Reflection ohne Rückkopplung**: Die Reflection-Klasse erzeugt Einsichten, aber diese fließen nicht zurück in den Entscheidungsprozess. Im Paper bilden Reflexionen einen Baum (Beobachtungen → Reflexionen → Meta-Reflexionen), der bei Retrieval bevorzugt wird.
+3. ~~**Reflection ohne Rückkopplung**~~ → ✅ **BEHOBEN**: Reflections werden als "thought"-Nodes mit LLM-gescorerter Importance gespeichert. Controller lädt die letzten 3 Reflections explizit. Focal Points werden via LLM generiert.
 
-4. **Planning ohne temporale Struktur**: `plan_daily()` erzeugt einen Tagesplan, aber keine Stunden-/Minutenblöcke. Der Plan wird nicht reaktiv angepasst, und der Fast-Path überschreibt ihn in den meisten Fällen.
+4. ~~**Planning ohne temporale Struktur**~~ → ✅ **TEILWEISE BEHOBEN**: Hierarchisches Planning (## Goal → Sub-Tasks). `hourly_tasks` + `advance_task()`. **Offen**: reaktives Umplanen bei unerwarteten Ereignissen.
 
-5. **Single-Agent-Limit**: Sowohl Generative Agents (25 Agenten) als auch Project Sid (500-1000+) definieren Multi-Agent-Interaktion als Kern des Systems. Ohne Multi-Agent können Social Awareness, Collective Rules, Cultural Transmission und emergente Dynamiken nicht entstehen.
+5. **Single-Agent-Limit** (OFFEN): Sowohl Generative Agents (25 Agenten) als auch Project Sid (500-1000+) definieren Multi-Agent-Interaktion als Kern des Systems. Ohne Multi-Agent können Social Awareness, Collective Rules, Cultural Transmission und emergente Dynamiken nicht entstehen.
 
-### Empfehlungen (Priorität)
+### Implementierte Verbesserungen (2026-06-25)
 
-1. **Retrieval-Formel implementieren** (Phase 2 Completion): Importance-Scoring via LLM, exponential decay, gewichtete Kombination → größter Impact auf Agent-Qualität
-2. **Planning hierarchisch machen** (Phase 2 Completion): Tagesplan → Stundenblöcke → 5-15 Min Aktionen; Fast-Path nur für Notfälle (Mob-Angriff, Nacht)
-3. **Reflection in Retrieval einbinden** (Phase 2 Completion): Reflexionen als hochwertige Memories in Retrieval einbeziehen
-4. **Fast-Path reduzieren** (Phase 3→4 Übergang): Nur für unmittelbare Gefahren beibehalten, Rest über LLM-Pipeline
-5. **Talking Module + Multi-Agent** (Phase 4 Start): Voraussetzung für alle Civilization-Features
+| Empfehlung | Status | Implementierung |
+|-----------|--------|----------------|
+| **1. Importance-Scoring via LLM** | ✅ Implementiert | `memory_stream.py`: `score_importance()` ruft LLM auf (Poignancy 1-10, normiert auf 0-1); Fallback auf Keyword-Heuristik. `agent.py`: `_score_importance_llm()` als Provider-Funktion. |
+| **2. Controller nutzt Retrieval + Reflections** | ✅ Implementiert | `controller.py`: `decide()` nutzt jetzt `agent.retrieval.retrieve()` (gewichtet: recency × relevance × importance) statt `get_recent(n=3)`; bindet Reflection-Insights + Daily Plan ein. |
+| **3. Hierarchisches Planning** | ✅ Implementiert | `planning.py`: `plan_daily()` erzeugt hierarchischen Plan (## Goal → Sub-Tasks); neues `hourly_tasks`-Feld; `advance_task()` für Task-Progression; `_parse_hierarchical_plan()`. |
+| **4. Fast-Path reduziert** | ✅ Implementiert | `agent.py`: Fast-Path nur bei `priority >= 0.7` (Gefahr), `craft`-Hint, oder Stuck; sonst LLM-Planner als Primärpfad; Fast-Path als letzter Fallback. |
+| **5. Reflection mit LLM** | ✅ Implementiert | `reflection.py`: `_generate_focal_points_llm()` generiert Fragen via LLM; Insights werden mit LLM-gescorerter Importance gespeichert; Threshold auf 50.0 erhöht. |
+
+### Überprüfbare Ziele
+
+| Ziel | Metrik | Akzeptanzkriterium | Prüfmethode |
+|------|--------|-------------------|-------------|
+| **LLM-Nutzung steigt** | % Ticks mit LLM-Planner vs Fast-Path | ≥ 50% LLM-basierte Aktionen (vorher ~20%) | Debug-Log: `LLM-PATH:` vs `FAST-PATH:` Einträge zählen |
+| **Importance-Varianz** | Std-Abweichung der Memory-Importance-Scores | σ > 0.15 (vorher 0.0, alle Werte 0.5) | SQLite: `SELECT AVG(importance), STDEV(importance) FROM nodes` |
+| **Reflection-Qualität** | Reflections enthalten Bezug zu konkreten Erfahrungen | ≥ 60% der Insights referenzieren spezifische Items/Orte | Debug-Log: `REFLECTION: stored insight` Einträge prüfen |
+| **Plan-Befolgung** | Agent führt Tasks aus dem Daily Plan aus | ≥ 3 Tasks pro Tagesplan werden tatsächlich bearbeitet | Debug-Log: Korrelation zwischen `daily plan:` und ausgeführten Aktionen |
+| **Kohärenz** | Agent wiederholt nicht dieselbe gescheiterte Aktion | < 5% Wiederholung von blacklisted Actions | Debug-Log: `blacklisted` Einträge nach Implementierung |
+
+### Verbleibende Empfehlungen
+
+1. **Talking Module + Multi-Agent** (Phase 4 Start): Voraussetzung für alle Civilization-Features
+2. **Task-Advancing**: Agent sollte automatisch zum nächsten hourly_task wechseln, wenn aktueller Task erledigt ist (basierend auf Action-Awareness-Feedback)
+3. **Reactive Replanning**: Wenn unerwartetes Ereignis eintritt (Mob-Angriff, neues Biom), Plan automatisch aktualisieren
 
 ---
 
@@ -174,18 +192,18 @@ minecraft-valis/
 4. ✅ Establish WebSocket bridge between plugin and agent brain
 5. ✅ Spawn first AI-controlled NPC agent in the world
 
-### Phase 2: Core Agent Architecture (Generative Agents) 🟡 60%
+### Phase 2: Core Agent Architecture (Generative Agents) ✅ 80%
 6. ✅ Perception module — capture world state (80 blocks, radius 12)
-7. ✅ Memory Stream — associative memory with embeddings (SQLite + ChromaDB)
-8. 🟡 Retrieval — nur n=3 letzte Memories; **fehlt**: Importance-Scoring (Poignancy 1-10), exponential decay, gewichtete Formel (α·recency + β·relevance + γ·importance)
-9. 🟡 Planning — plan_daily() existiert, **fehlt**: temporale Zerlegung (→ Stunden → 5-15 Min), reaktives Umplanen; Fast-Path überschreibt Plan ~80%
-10. 🟡 Reflection — Klasse vorhanden (~18 Zyklen/Session), **fehlt**: Importance-Trigger (∑importance > 150), Frage-Generierung, Rückkopplung in Retrieval/Entscheidungen
+7. ✅ Memory Stream — associative memory with embeddings (SQLite + ChromaDB) + LLM-basiertes Importance-Scoring (Poignancy 1-10)
+8. ✅ Retrieval — gewichtete Formel (α·recency + β·relevance + γ·importance) mit exponential decay; Controller + Planner nutzen Retrieval-Modul
+9. 🟡 Planning — hierarchischer Plan (Tagesplan → Sub-Tasks) implementiert; **fehlt**: reaktives Umplanen bei unerwarteten Ereignissen
+10. ✅ Reflection — LLM-basierte Focal Points, Importance-gescorte Insights, Rückkopplung in Controller-Entscheidungen via Retrieval
 11. ✅ Skill Execution — 9 Aktionstypen (move_to, mine_block, place_block, craft auto-chain, attack_mob, collect_items, equip, teleport, idle). Tool-aware Mining. Block-Breaking Animation.
-12. ✅ Agent loop — perceive → controller → plan → reflect → execute
+12. ✅ Agent loop — perceive → controller → plan → reflect → execute; LLM-first mit Fast-Path nur für Notfälle
 
-### Phase 3: PIANO Enhancements (Project Sid) 🟡 40%
+### Phase 3: PIANO Enhancements (Project Sid) 🟡 55%
 13. 🟡 Concurrent module execution — asyncio-Struktur vorhanden, Module aber sequentiell gepollt (Paper: parallel auf verschiedenen Zeitskalen)
-14. 🟡 Cognitive Controller — Bottleneck vorhanden, wird aber vom Reflex Layer zu oft umgangen (Paper: CC "strongly conditions" alle Output-Module)
+14. ✅ Cognitive Controller — Bottleneck mit gewichtetem Retrieval + Reflections + Plan-Kontext; Fast-Path auf Notfälle reduziert
 15. ✅ Action Awareness — compare expected vs actual outcomes, blacklist repeat failures
 16. 🟡 Social Awareness — directed sentiment graph (Skeleton, ungenutzt — single agent)
 17. 🟡 Goal Generation — 2 Zieltypen (economic, survival); **fehlt**: soziale Ziele basierend auf Beobachtung anderer Agenten
@@ -207,8 +225,8 @@ minecraft-valis/
 ## Verification Criteria
 
 - **Phase 1**: ✅ Server starts, plugin loads, WebSocket connects, single NPC spawns
-- **Phase 2**: 🟡 Agent performs full day-night cycle, executes Minecraft actions; Retrieval/Planning/Reflection als Skelett vorhanden aber nicht paper-konform (keine Importance-Formel, keine temporale Zerlegung, keine Reflexions-Rückkopplung)
-- **Phase 3**: 🟡 Controller + ActionAwareness + GoalGen funktional; CC wird vom Reflex Layer untergraben; Module nicht wirklich parallel; SocialAwareness ungenutzt
+- **Phase 2**: ✅ Paper-konforme Kernarchitektur: LLM Importance-Scoring, gewichtetes Retrieval (recency×relevance×importance), LLM-Reflection mit Focal Points, hierarchisches Planning; 🟡 fehlt: reaktives Umplanen
+- **Phase 3**: 🟡 CC mit Retrieval+Reflections+Plan; Fast-Path auf Notfälle reduziert; SocialAwareness ungenutzt (Single-Agent); Module sequentiell statt parallel
 - **Phase 4**: 🔲 2+ agents coexist, specialize in roles, participate in governance, propagate culture
 - **Phase 5**: 🟡 Debug logs comprehensive; dashboard/config pending
 

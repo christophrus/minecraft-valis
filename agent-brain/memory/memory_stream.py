@@ -58,6 +58,7 @@ class MemoryStream:
         agent_name: str,
         data_dir: str = "data",
         embedding_fn=None,
+        importance_fn=None,
     ):
         self.agent_name = agent_name
         self.data_dir = Path(data_dir) / agent_name
@@ -65,6 +66,7 @@ class MemoryStream:
 
         self._db_path = str(self.data_dir / "memory.db")
         self._embedding_fn = embedding_fn
+        self._importance_fn = importance_fn
         self._nodes: dict[str, ConceptNode] = {}
 
         self._init_db()
@@ -131,10 +133,34 @@ class MemoryStream:
 
         return node.node_id
 
-    async def add_event(self, content: str, importance: float = 0.5,
+    async def score_importance(self, content: str) -> float:
+        """Score memory importance (poignancy) via LLM on a 1-10 scale.
+
+        Falls back to keyword heuristics if LLM is unavailable.
+        """
+        if self._importance_fn:
+            try:
+                score = await self._importance_fn(content)
+                return max(0.0, min(1.0, score))
+            except Exception as e:
+                logger.warning(f"LLM importance scoring failed: {e}")
+
+        lower = content.lower()
+        score = 0.3
+        high_signal = ["craft", "pickaxe", "axe", "sword", "shelter", "danger",
+                       "attack", "died", "found", "diamond", "iron", "learned",
+                       "insight", "goal", "reflection"]
+        for kw in high_signal:
+            if kw in lower:
+                score += 0.1
+        return min(1.0, score)
+
+    async def add_event(self, content: str, importance: float | None = None,
                         subject: str = "", predicate: str = "", object: str = "",
                         keywords: list[str] | None = None) -> str:
-        """Add an event to the memory stream."""
+        """Add an event to the memory stream. Importance is scored via LLM if not provided."""
+        if importance is None:
+            importance = await self.score_importance(content)
         node = ConceptNode(
             node_type="event",
             content=content,

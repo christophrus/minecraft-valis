@@ -20,26 +20,50 @@ logger = logging.getLogger("valis.cognitive.planning")
 
 class Planner:
     """
-    Handles agent planning at two levels:
-    1. Daily schedule (long-term)
-    2. Moment-to-moment action selection (short-term)
+    Handles agent planning at three levels (Generative Agents paper):
+    1. Daily schedule — broad goals for the Minecraft day
+    2. Hourly blocks — decomposed into concrete sub-tasks
+    3. Moment-to-moment — action selection based on current context
     """
 
     def __init__(self):
         self.daily_plan: list[str] = []
+        self.hourly_tasks: list[str] = []
         self.current_task: str = ""
+        self.current_task_index: int = 0
         self.last_daily_plan_time: datetime.datetime | None = None
+        self.tasks_completed: int = 0
+
+    def advance_task(self):
+        """Move to the next hourly task when the current one is done."""
+        self.current_task_index += 1
+        self.tasks_completed += 1
+        tasks = self.hourly_tasks or self.daily_plan
+        if self.current_task_index < len(tasks):
+            self.current_task = tasks[self.current_task_index]
+        else:
+            self.current_task_index = 0
+            self.current_task = tasks[0] if tasks else ""
+        logger.info(f"Task advanced → [{self.current_task_index}] {self.current_task}")
 
     async def plan_daily(self, agent: "ValisAgent") -> list[str]:
         """
-        Generate a daily plan based on the agent's personality, memory, and goals.
-        Called at the start of each Minecraft day.
+        Generate a hierarchical daily plan:
+        1. Ask LLM for 3-6 high-level goals
+        2. Decompose each goal into 2-3 concrete sub-tasks with coordinates
         """
-        # Build prompt context
         context = agent.perception_processor.build_context_text()
         personality = agent.personality
         goals = agent.goals
         memory_context = await self._get_memory_context(agent)
+
+        # Reflection insights for planning context
+        recent_reflections = agent.memory.get_recent(n=3, node_type="thought")
+        reflection_text = ""
+        if recent_reflections:
+            reflection_text = "Lessons learned:\n" + "\n".join(
+                f"- {r.content[:120]}" for r in recent_reflections
+            )
 
         prompt = f"""You are {agent.name}, a {personality} in a Minecraft world.
 
@@ -50,53 +74,88 @@ Your traits: {personality}
 Recent memories:
 {memory_context}
 
+{reflection_text}
+
 Your current goals:
 {chr(10).join(f'- {g}' for g in goals)}
 
-Generate a daily plan for today as a list of 3-6 tasks you want to accomplish.
-Each task should be concrete and achievable with the blocks and resources you can see right now.
-IMPORTANT: Use the "Biomes in the distance" information to decide WHERE to explore.
-If you need wood and a forest is to the north, your first task should be "Travel north to find trees in the forest biome".
-Include exact block coordinates from "Nearby blocks" when possible.
-Format: one task per line, starting with a dash (-)."""
+Generate a daily plan with 3-5 high-level goals, each decomposed into 2-3 concrete sub-tasks.
+Use exact coordinates from "Nearby blocks" when possible.
+Use "Biomes in the distance" to decide WHERE to explore.
+
+Format:
+## Goal 1: <high-level goal>
+- <concrete sub-task with coordinates/details>
+- <concrete sub-task>
+## Goal 2: <high-level goal>
+- <concrete sub-task>
+- <concrete sub-task>"""
 
         response = await agent.llm.chat([
-            {"role": "system", "content": "You are an AI agent in Minecraft. Output only the task list, no preamble."},
+            {"role": "system", "content": "You are an AI agent in Minecraft. Output the structured plan, no preamble."},
             {"role": "user", "content": prompt},
         ])
-        # Retry once if empty response
         if not response or not response.strip():
             logger.warning(f"Agent {agent.name} plan LLM returned empty, retrying...")
             response = await agent.llm.chat([
-                {"role": "system", "content": "You MUST output a task list. Each line starting with a dash. Example: - Gather wood"},
+                {"role": "system", "content": "You MUST output a plan. Format: ## Goal: title, then - sub-tasks."},
                 {"role": "user", "content": prompt},
             ])
 
-        # Parse tasks from response
-        tasks = []
-        for line in response.strip().split("\n"):
-            line = line.strip()
-            # Support "- task", "1. task", "* task", or bare lines
-            if line.startswith("- "):
-                tasks.append(line[2:])
-            elif line.startswith("-"):
-                tasks.append(line[1:])
-            elif line and line[0].isdigit() and ". " in line[:4]:
-                tasks.append(line.split(". ", 1)[1])
-            elif line.startswith("* "):
-                tasks.append(line[2:])
-            elif line and not line.startswith(("#", "//", "```")) and len(line) > 5:
-                # Bare line that looks like a task
-                tasks.append(line)
+        daily_goals, hourly_tasks = self._parse_hierarchical_plan(response)
 
-        self.daily_plan = tasks if tasks else ["Explore the area", "Gather resources", "Find shelter"]
-        if not tasks:
-            logger.warning(f"Agent {agent.name} plan parse FAILED. Raw LLM response: '{response[:300]}'")
+        self.daily_plan = daily_goals if daily_goals else ["Explore the area", "Gather resources", "Find shelter"]
+        self.hourly_tasks = hourly_tasks if hourly_tasks else self.daily_plan[:]
+        if not daily_goals:
+            logger.warning(f"Agent {agent.name} plan parse FAILED. Raw: '{response[:300]}'")
         self.last_daily_plan_time = datetime.datetime.now()
-        self.current_task = self.daily_plan[0] if self.daily_plan else ""
+        self.current_task_index = 0
+        self.current_task = self.hourly_tasks[0] if self.hourly_tasks else ""
 
         logger.info(f"Agent {agent.name} daily plan: {self.daily_plan}")
+        logger.info(f"Agent {agent.name} hourly tasks ({len(self.hourly_tasks)}): {self.hourly_tasks}")
         return self.daily_plan
+
+    def _parse_hierarchical_plan(self, response: str) -> tuple[list[str], list[str]]:
+        """Parse a hierarchical plan into daily goals and hourly sub-tasks."""
+        daily_goals = []
+        hourly_tasks = []
+        current_goal = None
+
+        for line in response.strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+
+            if line.startswith("## ") or line.startswith("# "):
+                goal = line.lstrip("# ").strip()
+                if goal.lower().startswith("goal"):
+                    goal = goal.split(":", 1)[-1].strip() if ":" in goal else goal
+                if goal:
+                    current_goal = goal
+                    daily_goals.append(goal)
+            elif line.startswith("- ") or line.startswith("* "):
+                task = line[2:].strip()
+                if task:
+                    hourly_tasks.append(task)
+            elif line.startswith("-"):
+                task = line[1:].strip()
+                if task:
+                    hourly_tasks.append(task)
+            elif line and line[0].isdigit() and ". " in line[:4]:
+                task = line.split(". ", 1)[1].strip()
+                if task:
+                    if current_goal is None:
+                        daily_goals.append(task)
+                    else:
+                        hourly_tasks.append(task)
+            elif line and not line.startswith(("#", "//", "```")) and len(line) > 5:
+                if current_goal is None:
+                    daily_goals.append(line)
+                else:
+                    hourly_tasks.append(line)
+
+        return daily_goals, hourly_tasks
 
     async def decide_action(
         self,
@@ -178,11 +237,17 @@ Respond with exactly ONE action in format: action_name(param1=value1, param2=val
         return response.strip()
 
     async def _get_memory_context(self, agent: "ValisAgent") -> str:
-        """Get a summary of recent memories for planning context."""
-        recent = agent.memory.get_recent(n=5)
-        if not recent:
+        """Get relevant memories via weighted retrieval for planning context."""
+        query = f"Planning next actions. Goals: {', '.join(agent.goals[:3])}"
+        try:
+            memories = await agent.retrieval.retrieve(
+                query, limit=5, embedding_fn=agent.llm.embed,
+            )
+        except Exception:
+            memories = agent.memory.get_recent(n=5)
+        if not memories:
             return "No memories yet."
         return "\n".join(
-            f"- [{m.created.strftime('%H:%M')}] ({m.node_type}) {m.content[:100]}"
-            for m in recent
+            f"- [{m.created.strftime('%H:%M')}] (imp={m.importance:.1f}) {m.content[:100]}"
+            for m in memories
         )
