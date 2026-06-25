@@ -113,6 +113,7 @@ class ValisAgent:
 
         # Action state
         self._crafting_table_placed = False  # Prevent re-placing after successful placement
+        self._crafting_table_pos: tuple[int, int, int] | None = None  # Where we placed it
         self._recently_crafted: dict[str, float] = {}  # Track recent crafts to avoid duplicate due to inv lag
         self._failed_actions: dict[str, int] = {}  # Track repeated failures to avoid retrying (e.g. "place:stick")
         self._craft_idle_streak: int = 0  # Count consecutive craft→idle cycles to break deadlocks
@@ -205,11 +206,20 @@ class ValisAgent:
             if plank_type not in self._recently_crafted:
                 craft_action = AgentAction(agent_name="", action="craft", params={"item": plank_type})
                 logger.debug(f"FAST-PATH: pre-emptive CRAFT planks ({best_log}={inv.get(best_log,0)})")
-        # Crafting table: when we have 4+ planks, no table in inventory, and none placed nearby
-        elif total_planks >= 4 and inv.get("crafting_table", 0) < 1 and not self._crafting_table_placed:
-            if "crafting_table" not in self._recently_crafted:
-                craft_action = AgentAction(agent_name="", action="craft", params={"item": "crafting_table"})
-                logger.debug(f"FAST-PATH: pre-emptive CRAFT crafting_table (planks={total_planks})")
+        # Crafting table: when we have 4+ planks, no table in inventory
+        # Reset _crafting_table_placed if agent wandered far from where it was placed
+        elif total_planks >= 4 and inv.get("crafting_table", 0) < 1:
+            if self._crafting_table_placed and self._crafting_table_pos:
+                ctx, cty, ctz = self._crafting_table_pos
+                table_dist = abs(px - ctx) + abs(py - cty) + abs(pz - ctz)
+                if table_dist > 16:
+                    logger.debug(f"FAST-PATH: crafting_table too far ({table_dist}m), allowing re-craft")
+                    self._crafting_table_placed = False
+                    self._crafting_table_pos = None
+            if not self._crafting_table_placed:
+                if "crafting_table" not in self._recently_crafted:
+                    craft_action = AgentAction(agent_name="", action="craft", params={"item": "crafting_table"})
+                    logger.debug(f"FAST-PATH: pre-emptive CRAFT crafting_table (planks={total_planks})")
         # Pickaxe: 3 planks + 2 sticks (BEFORE sticks check — don't waste planks on sticks first)
         elif total_sticks >= 2 and total_planks >= 3 and not has_pickaxe:
             pickaxe_type = "wooden_pickaxe"
@@ -256,6 +266,7 @@ class ValisAgent:
             if not blocked:
                 logger.debug(f"FAST-PATH: placing crafting_table at ({tx},{ty},{tz})")
                 self._crafting_table_placed = True
+                self._crafting_table_pos = (tx, ty, tz)
                 return AgentAction(agent_name="", action="place_block",
                                    params={"block_type": "crafting_table", "x": tx, "y": ty, "z": tz})
 
@@ -417,6 +428,24 @@ class ValisAgent:
                             above_y = test_y
                             break
                     if above_y is None:
+                        # Try adjacent columns (N/E/S/W) if target column is blocked
+                        for adx, adz in [(1,0),(-1,0),(0,1),(0,-1)]:
+                            adj_x, adj_z = int(tx) + adx, int(tz) + adz
+                            for dy in range(0, 4):
+                                test_y = int(ty) + dy
+                                test_key = f"{adj_x},{test_y},{adj_z}"
+                                if test_key in self._recently_failed_place or test_key in self._recently_placed:
+                                    continue
+                                blocked_adj = any(b.get("x",0)==adj_x and b.get("y",0)==test_y and b.get("z",0)==adj_z
+                                                  and b.get("type","").upper() not in ("AIR","CAVE_AIR","VOID_AIR") for b in blocks)
+                                if not blocked_adj:
+                                    above_y = test_y
+                                    tx, tz = float(adj_x), float(adj_z)
+                                    logger.debug(f"FAST-PATH: place redirected to adjacent ({adj_x},{test_y},{adj_z})")
+                                    break
+                            if above_y is not None:
+                                break
+                    if above_y is None:
                         self._recently_failed_place[f"{int(tx)},{int(ty)},{int(tz)}"] = now
                         logger.debug(f"FAST-PATH: place all Y blocked at ({int(tx)},{int(tz)}), falling through")
                         pass  # Fall through to explore
@@ -542,13 +571,16 @@ class ValisAgent:
                 # If 4 dig attempts found nothing useful, teleport to safe ground immediately
                 if self._stuck_mine_attempts >= 4:
                     self._stuck_mine_attempts = 0
-                    # Direct teleport to ground level — much more reliable than random jumps
-                    safe_y = 64  # Sea level, usually safe ground
-                    logger.warning(f"FAST-PATH: STUCK-ESCAPE teleporting from ({px},{py},{pz}) to ({px},{safe_y},{pz})")
+                    import random as _rnd2
+                    dx2, dz2 = _rnd2.choice([(1,0),(-1,0),(0,1),(0,-1)])
+                    offset2 = _rnd2.randint(10, 20)
+                    tp_x, tp_z = px + dx2 * offset2, pz + dz2 * offset2
+                    safe_y = 70
+                    logger.warning(f"FAST-PATH: STUCK-ESCAPE teleporting from ({px},{py},{pz}) to ({tp_x},{safe_y},{tp_z})")
                     self._nav_target = None
                     self._stuck_positions = []
                     return AgentAction(agent_name="", action="teleport",
-                                       params={"x": px, "y": safe_y, "z": pz})
+                                       params={"x": tp_x, "y": safe_y, "z": tp_z})
                 self._nav_target = None
                 self._explore_heading = None
                 self._explore_steps = 0
@@ -611,13 +643,16 @@ class ValisAgent:
                     return AgentAction(agent_name="", action="mine_block",
                         params={"x": int(t.get("x",px)), "y": int(t.get("y",py)), "z": int(t.get("z",pz))})
                 # If intent target is minable and within 5 blocks, mine it
+                # Skip nav-only/UNKNOWN/AIR targets — they're not verified in perception
                 if intent_target and pos_key(intent_target) not in self._recently_mined:
-                    itx, ity, itz = int(intent_target.get("x",0)), int(intent_target.get("y",0)), int(intent_target.get("z",0))
-                    if abs(itx-px) <= 5 and abs(ity-py) <= 5 and abs(itz-pz) <= 5:
-                        logger.debug(f"FAST-PATH: MINE=intent-target {intent_target.get('type','?')} at ({itx},{ity},{itz})")
-                        self._nav_target = None
-                        return AgentAction(agent_name="", action="mine_block",
-                            params={"x": itx, "y": ity, "z": itz})
+                    it_type = intent_target.get("type", "UNKNOWN").upper()
+                    if not intent_target.get("_nav_only") and it_type not in ("UNKNOWN", "AIR", "CAVE_AIR", "VOID_AIR"):
+                        itx, ity, itz = int(intent_target.get("x",0)), int(intent_target.get("y",0)), int(intent_target.get("z",0))
+                        if abs(itx-px) <= 5 and abs(ity-py) <= 5 and abs(itz-pz) <= 5:
+                            logger.debug(f"FAST-PATH: MINE=intent-target {it_type} at ({itx},{ity},{itz})")
+                            self._nav_target = None
+                            return AgentAction(agent_name="", action="mine_block",
+                                params={"x": itx, "y": ity, "z": itz})
 
             # Priority 2 (MOVE): Navigate toward intent coordinates (for mine/explore/move)
             if intent_coords:
@@ -857,17 +892,21 @@ Respond ONLY with valid JSON:
                 self._last_move_info = {}  # Reset tracker on position change
             elif ticks_since >= 3 and elapsed > 4:
                 logger.warning(f"NAV-STALL: no movement for {ticks_since} ticks ({elapsed:.1f}s) since move_to target=({lmi['target'][0]},{lmi['target'][1]},{lmi['target'][2]}), still at ({cpx:.0f},{cpy:.0f},{cpz:.0f})")
-                # After 5+ ticks of stall, teleport to safe ground immediately
-                # (LLM emergency help is too slow and often gives bad suggestions)
+                # After 5+ ticks of stall, teleport with random offset to escape
+                # (same X,Z teleport often fails because the spot itself is stuck)
                 if ticks_since >= 5 and self._last_move_info:
-                    safe_y = 64
-                    logger.warning(f"NAV-STALL-ESCAPE: teleporting from ({cpx:.0f},{cpy:.0f},{cpz:.0f}) to ground level y={safe_y}")
+                    import random as _rnd
+                    dx, dz = _rnd.choice([(1,0),(-1,0),(0,1),(0,-1)])
+                    offset = _rnd.randint(10, 20)
+                    tp_x, tp_z = int(cpx) + dx * offset, int(cpz) + dz * offset
+                    safe_y = 70
+                    logger.warning(f"NAV-STALL-ESCAPE: teleporting from ({cpx:.0f},{cpy:.0f},{cpz:.0f}) to ({tp_x},{safe_y},{tp_z})")
                     self._last_move_info = {}
                     self._nav_target = None
                     if hasattr(self, '_stuck_positions'):
                         self._stuck_positions = []
                     return AgentAction(agent_name=self.name, action="teleport",
-                                       params={"x": int(cpx), "y": safe_y, "z": int(cpz)})
+                                       params={"x": tp_x, "y": safe_y, "z": tp_z})
 
         try:
             # Step 0: Handle pending emergency from stuck detection (sync→async bridge)
