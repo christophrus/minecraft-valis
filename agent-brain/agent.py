@@ -323,6 +323,23 @@ class ValisAgent:
                     logger.debug(f"FAST-PATH: skipping junk target (priority={target_priority}, type={target_type}), fall to explore")
                     pass  # Fall through to move/explore
                 elif hint == "mine":
+                    # PRIORITY: Check for ANY nearby minable block first (≤4 blocks)
+                    # before navigating to far-away intent targets.
+                    minable_nearby = [b for b in blocks
+                                    if b.get("type","").upper() not in ("AIR","CAVE_AIR","VOID_AIR","BEDROCK","WATER","LAVA")
+                                    and "_LEAVES" not in b.get("type","").upper()
+                                    and pos_key(b) not in self._recently_mined
+                                    and abs(b.get("x",0)-px) <= 4 and abs(b.get("y",0)-py) <= 4
+                                    and abs(b.get("z",0)-pz) <= 4]
+                    if minable_nearby:
+                        t = min(minable_nearby, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
+                        tkey = pos_key(t)
+                        self._recently_mined[tkey] = now
+                        logger.debug(f"FAST-PATH: MINE=nearby {t.get('type','?')} at ({t.get('x')},{t.get('y')},{t.get('z')})")
+                        return AgentAction(agent_name="", action="mine_block",
+                            params={"x": int(t.get("x",px)), "y": int(t.get("y",py)), "z": int(t.get("z",pz))})
+
+                    # No nearby block — proceed with far-target logic
                     if is_night and target_type in junk_types and not has_wood:
                         logger.debug(f"FAST-PATH: night override — mining {target_type} for survival")
                     elif target_priority == 3 and target_type in junk_types and not has_wood:
