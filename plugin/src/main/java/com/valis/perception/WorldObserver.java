@@ -92,7 +92,7 @@ public class WorldObserver {
      */
     private JsonArray observeBlocks(Location loc, World world) {
         JsonArray blocks = new JsonArray();
-        int r = Math.min(radius, 12); // Slightly smaller radius, but step=1 for full coverage
+        int r = Math.min(radius, 12);
         int bx = loc.getBlockX();
         int by = loc.getBlockY();
         int bz = loc.getBlockZ();
@@ -100,21 +100,25 @@ public class WorldObserver {
         for (int dx = -r; dx <= r; dx += 1) {
             for (int dz = -r; dz <= r; dz += 1) {
                 if (dx == 0 && dz == 0) continue;
-                // Sample from feet (-1) up to +8 to capture full tree trunks
+                int wx = bx + dx;
+                int wz = bz + dz;
+                // Skip unloaded chunks — accessing block data in unloaded chunks
+                // causes the server to freeze waiting for chunk generation (thread dump).
+                if (!world.isChunkLoaded(wx >> 4, wz >> 4)) continue;
                 for (int dy = -1; dy <= 8; dy++) {
-                    Block block = world.getBlockAt(bx + dx, by + dy, bz + dz);
+                    Block block = world.getBlockAt(wx, by + dy, wz);
                     Material mat = block.getType();
                     if (mat != Material.AIR && mat != Material.CAVE_AIR && mat != Material.VOID_AIR) {
                         JsonObject b = new JsonObject();
-                        b.addProperty("x", bx + dx);
+                        b.addProperty("x", wx);
                         b.addProperty("y", by + dy);
-                        b.addProperty("z", bz + dz);
+                        b.addProperty("z", wz);
                         b.addProperty("type", mat.name());
                         b.addProperty("relative_x", dx);
                         b.addProperty("relative_y", dy);
                         b.addProperty("relative_z", dz);
                         blocks.add(b);
-                        if (blocks.size() >= 80) break; // Cap for payload size
+                        if (blocks.size() >= 80) break;
                     }
                 }
                 if (blocks.size() >= 80) break;
