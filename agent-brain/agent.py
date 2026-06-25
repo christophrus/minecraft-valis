@@ -560,7 +560,32 @@ class ValisAgent:
                     return AgentAction(agent_name="", action="idle")
                 self._nav_target = None
             
-            # Priority 1: Use LLM intent coordinates for navigation
+            # Priority 1 (MINE): Mine nearby blocks first — don't navigate to far-away intent coords
+            if hint == "mine":
+                # Find the closest minable block within 4 blocks
+                minable = [b for b in blocks
+                          if b.get("type","").upper() not in ("AIR","CAVE_AIR","VOID_AIR","BEDROCK","WATER","LAVA")
+                          and "_LEAVES" not in b.get("type","").upper()
+                          and pos_key(b) not in self._recently_mined]
+                close_minable = [b for b in minable
+                                if abs(b.get("x",0)-px) <= 4 and abs(b.get("y",0)-py) <= 4
+                                and abs(b.get("z",0)-pz) <= 4]
+                if close_minable:
+                    t = min(close_minable, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
+                    logger.debug(f"FAST-PATH: MINE=nearby {t.get('type','?')} at ({t.get('x')},{t.get('y')},{t.get('z')})")
+                    self._nav_target = None
+                    return AgentAction(agent_name="", action="mine_block",
+                        params={"x": int(t.get("x",px)), "y": int(t.get("y",py)), "z": int(t.get("z",pz))})
+                # If intent target is minable and within 5 blocks, mine it
+                if intent_target and pos_key(intent_target) not in self._recently_mined:
+                    itx, ity, itz = int(intent_target.get("x",0)), int(intent_target.get("y",0)), int(intent_target.get("z",0))
+                    if abs(itx-px) <= 5 and abs(ity-py) <= 5 and abs(itz-pz) <= 5:
+                        logger.debug(f"FAST-PATH: MINE=intent-target {intent_target.get('type','?')} at ({itx},{ity},{itz})")
+                        self._nav_target = None
+                        return AgentAction(agent_name="", action="mine_block",
+                            params={"x": itx, "y": ity, "z": itz})
+
+            # Priority 2 (MOVE): Navigate toward intent coordinates (for mine/explore/move)
             if intent_coords:
                 ix, iy, iz = int(intent_coords[0][0]), int(intent_coords[0][1]), int(intent_coords[0][2])
                 dist_to_intent = math.sqrt((px-ix)**2 + (py-iy)**2 + (pz-iz)**2)
@@ -571,7 +596,7 @@ class ValisAgent:
                     return AgentAction(agent_name="", action="move_to",
                                        params={"x": ix, "y": iy, "z": iz})
             
-            # Priority 2: Wood/leaves nearby while exploring → stop and mine (or navigate closer)
+            # Priority 3: Wood/leaves nearby while exploring → stop and mine (or navigate closer)
             wood_nearby = [b for b in blocks if b.get("type","").upper() in 
                           ("OAK_LOG","BIRCH_LOG","SPRUCE_LOG","JUNGLE_LOG","ACACIA_LOG",
                            "DARK_OAK_LOG","CHERRY_LOG","MANGROVE_LOG")]
