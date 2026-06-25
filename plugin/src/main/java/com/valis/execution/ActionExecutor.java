@@ -50,6 +50,7 @@ public class ActionExecutor {
                 case "equip" -> equip(params);
                 case "look_at" -> lookAt(params);
                 case "chat" -> chat(params);
+                case "teleport" -> teleport(params);
                 case "idle" -> idle();
                 default -> {
                     log.warning("Unknown action for " + agent.getAgentName() + ": " + action);
@@ -370,19 +371,57 @@ public class ActionExecutor {
         boolean crafted = false;
         for (var recipe : recipes) {
             if (recipe instanceof org.bukkit.inventory.ShapedRecipe shaped) {
-                var ingredients = shaped.getIngredientMap();
+                // Use getChoiceMap() to support material variants (e.g. any plank type for crafting_table)
+                var choices = shaped.getChoiceMap();
+                // For each slot, find which material the agent actually has
+                // Map: slot -> (matched material name, amount needed)
+                var slotMatches = new java.util.HashMap<Character, String>();
+                // Count total needed per matched material
+                var totalNeeded = new java.util.HashMap<String, Integer>();
                 boolean hasAll = true;
-                for (var entry : ingredients.entrySet()) {
-                    if (entry.getValue() == null || entry.getValue().getType() == Material.AIR) continue;
-                    String matName = entry.getValue().getType().name().toLowerCase();
-                    int needed = entry.getValue().getAmount();
-                    Integer has = agent.getInventory().get(matName);
-                    if (has == null || has < needed) { hasAll = false; break; }
+
+                for (var entry : choices.entrySet()) {
+                    var choice = entry.getValue();
+                    if (choice == null) continue;
+                    String matchedMat = null;
+                    if (choice instanceof org.bukkit.inventory.RecipeChoice.MaterialChoice matChoice) {
+                        // Try each valid material variant against inventory
+                        for (Material mat : matChoice.getChoices()) {
+                            String matName = mat.name().toLowerCase();
+                            int alreadyNeeded = totalNeeded.getOrDefault(matName, 0);
+                            Integer has = agent.getInventory().get(matName);
+                            if (has != null && has > alreadyNeeded) {
+                                matchedMat = matName;
+                                break;
+                            }
+                        }
+                    } else if (choice instanceof org.bukkit.inventory.RecipeChoice.ExactChoice exact) {
+                        for (var stack : exact.getChoices()) {
+                            String matName = stack.getType().name().toLowerCase();
+                            int alreadyNeeded = totalNeeded.getOrDefault(matName, 0);
+                            Integer has = agent.getInventory().get(matName);
+                            if (has != null && has > alreadyNeeded) {
+                                matchedMat = matName;
+                                break;
+                            }
+                        }
+                    }
+                    if (matchedMat == null) { hasAll = false; break; }
+                    slotMatches.put(entry.getKey(), matchedMat);
+                    totalNeeded.merge(matchedMat, 1, Integer::sum);
+                }
+
+                if (!hasAll) continue;
+                // Verify totals
+                for (var needed : totalNeeded.entrySet()) {
+                    Integer has = agent.getInventory().get(needed.getKey());
+                    if (has == null || has < needed.getValue()) { hasAll = false; break; }
                 }
                 if (!hasAll) continue;
-                for (var entry : ingredients.entrySet()) {
-                    if (entry.getValue() == null || entry.getValue().getType() == Material.AIR) continue;
-                    agent.removeFromInventory(entry.getValue().getType().name().toLowerCase(), entry.getValue().getAmount());
+
+                // Consume ingredients
+                for (var needed : totalNeeded.entrySet()) {
+                    agent.removeFromInventory(needed.getKey(), needed.getValue());
                 }
                 agent.addToInventory(resultMat, shaped.getResult().getAmount());
                 plugin.getWsBridge().sendActionResult(agent.getAgentName(), "craft",
@@ -431,6 +470,44 @@ public class ActionExecutor {
         agent.sendChat(message);
         plugin.getWsBridge().sendActionResult(agent.getAgentName(), "chat",
                 true, "said: " + message);
+    }
+
+    /**
+     * Teleport the NPC to a specified position, finding safe ground.
+     */
+    private void teleport(JsonObject params) {
+        int x = (int) params.get("x").getAsDouble();
+        int y = (int) params.get("y").getAsDouble();
+        int z = (int) params.get("z").getAsDouble();
+
+        NPC npc = agent.getNpc();
+        if (npc == null || !npc.isSpawned()) return;
+
+        World world = npc.getStoredLocation().getWorld();
+        if (world == null) return;
+
+        // Find safe ground: scan downward from target Y, then upward
+        int safeY = y;
+        for (int dy = 0; dy < 20; dy++) {
+            Block below = world.getBlockAt(x, y - dy, z);
+            Block atFeet = world.getBlockAt(x, y - dy + 1, z);
+            Block atHead = world.getBlockAt(x, y - dy + 2, z);
+            if (below.getType().isSolid()
+                    && !atFeet.getType().isSolid()
+                    && !atHead.getType().isSolid()) {
+                safeY = y - dy + 1;
+                break;
+            }
+        }
+
+        Location target = new Location(world, x + 0.5, safeY, z + 0.5);
+        npc.teleport(target, PlayerTeleportEvent.TeleportCause.PLUGIN);
+        // Cancel any ongoing navigation
+        if (npc.getNavigator().isNavigating()) {
+            npc.getNavigator().cancelNavigation();
+        }
+        plugin.getWsBridge().sendActionResult(agent.getAgentName(), "teleport",
+                true, "teleported to " + x + "," + safeY + "," + z);
     }
 
     /**

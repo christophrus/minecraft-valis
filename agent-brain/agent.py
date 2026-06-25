@@ -243,12 +243,15 @@ class ValisAgent:
                 logger.debug(f"FAST-PATH: pre-emptive CRAFT sticks (planks={total_planks}, sticks={total_sticks})")
         
         if craft_action:
-            # Track crafted item to prevent duplicate crafts due to inventory lag
             item = craft_action.params.get("item", "")
-            if item:
+            fail_key = f"craft:{item}"
+            if fail_key in self._failed_actions and self._failed_actions[fail_key] >= 3:
+                logger.debug(f"FAST-PATH: skipping pre-emptive craft {item} — blacklisted ({self._failed_actions[fail_key]} failures)")
+                craft_action = None
+            elif item:
                 self._recently_crafted[item] = time.time()
-            self._craft_idle_streak = 0  # Reset idle streak on successful craft dispatch
-            return craft_action
+                self._craft_idle_streak = 0
+                return craft_action
 
         # --- CRAFTING TABLE: place if we have one but none nearby ---
         has_crafting_table_inv = inv.get("crafting_table", 0) >= 1
