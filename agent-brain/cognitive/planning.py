@@ -82,6 +82,7 @@ Your current goals:
 Generate a daily plan with 3-5 high-level goals, each decomposed into 2-3 concrete sub-tasks.
 Use exact coordinates from "Nearby blocks" when possible.
 Use "Biomes in the distance" to decide WHERE to explore.
+Use "CAN CRAFT NOW" and "ALMOST CRAFTABLE" to drive tech progression: include concrete steps to gather the missing materials for ALMOST CRAFTABLE upgrades and advance your tools to the next tier (wood → stone → iron) instead of repeating items you already own.
 
 Format:
 ## Goal 1: <high-level goal>
@@ -232,8 +233,13 @@ Available actions:
 - chat(message): Send a chat message
 - idle: Do nothing this tick
 
-IMPORTANT: Only craft items shown in CAN CRAFT NOW. To get missing materials, mine or gather what ALMOST CRAFTABLE shows.
-Use mine_block with exact coordinates from "Nearby blocks". If the block you need is not nearby, use move_to to explore.
+CRAFTING STRATEGY (tech progression — wood → stone → iron):
+- Only craft items shown in CAN CRAFT NOW, using exact item names.
+- Do NOT re-craft a tool you already own (check Inventory). If you have a wooden pickaxe, work toward a STONE pickaxe next, then IRON.
+- Treat ALMOST CRAFTABLE as concrete upgrade targets: read the missing material and go obtain it. Example — if "stone_pickaxe (need: 3 cobblestone)" is shown, mine stone (dig down if no stone is nearby) to get cobblestone, then craft it.
+- Prefer upgrading to better gear over re-gathering materials you already have enough of.
+
+MOVEMENT: Use mine_block with exact coordinates from "Nearby blocks". If a needed block is not nearby, use move_to toward it (e.g. dig downward to reach stone).
 
 Respond with exactly ONE action in format: action_name(param1=value1, param2=value2, ...)"""
 
