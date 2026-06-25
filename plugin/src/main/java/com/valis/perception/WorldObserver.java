@@ -92,7 +92,15 @@ public class WorldObserver {
         report.add("inventory", agent.inventoryToJson());
 
         // Craftable items analysis
-        report.add("craftable", observeCraftable());
+        try {
+            report.add("craftable", observeCraftable());
+        } catch (Throwable e) {
+            plugin.getLogger().warning("observeCraftable() failed: " + e.getClass().getName() + ": " + e.getMessage());
+            JsonObject empty = new JsonObject();
+            empty.add("can_craft", new JsonArray());
+            empty.add("almost", new JsonArray());
+            report.add("craftable", empty);
+        }
 
         return report;
     }
@@ -117,11 +125,14 @@ public class WorldObserver {
      * Analyze which items the agent can craft with its current inventory.
      * Returns JSON with "can_craft" (have all materials) and "almost" (missing 1-2 items).
      */
+    private int craftDebugCounter = 0;
+
     private JsonObject observeCraftable() {
         JsonObject result = new JsonObject();
         JsonArray canCraft = new JsonArray();
         JsonArray almost = new JsonArray();
         Map<String, Integer> inv = agent.getInventory();
+        craftDebugCounter++;
 
         for (Material target : RELEVANT_ITEMS) {
             var recipes = Bukkit.getRecipesFor(new ItemStack(target));
@@ -177,21 +188,36 @@ public class WorldObserver {
         }
         result.add("can_craft", canCraft);
         result.add("almost", almost);
+        if (canCraft.size() > 0 && craftDebugCounter % 100 == 1) {
+            plugin.getLogger().info("Craftable: can=" + canCraft.size() + " almost=" + almost.size()
+                    + " inv=" + inv.size());
+        }
         return result;
     }
 
     private boolean parseShapedRecipe(ShapedRecipe shaped, Map<String, Integer> inv,
                                        Map<String, Integer> needed) {
+        // Count how many times each key character appears in the shape pattern
+        Map<Character, Integer> keyCounts = new HashMap<>();
+        for (String row : shaped.getShape()) {
+            for (char c : row.toCharArray()) {
+                if (c != ' ') {
+                    keyCounts.merge(c, 1, Integer::sum);
+                }
+            }
+        }
+
         var choices = shaped.getChoiceMap();
         for (var entry : choices.entrySet()) {
             var choice = entry.getValue();
             if (choice == null) continue;
+            int count = keyCounts.getOrDefault(entry.getKey(), 1);
             String matched = matchChoice(choice, inv, needed);
             if (matched == null) {
                 matched = matchChoiceAny(choice);
             }
             if (matched == null) return false;
-            needed.merge(matched, 1, Integer::sum);
+            needed.merge(matched, count, Integer::sum);
         }
         return true;
     }

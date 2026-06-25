@@ -1021,7 +1021,7 @@ Respond ONLY with valid JSON:
             # Fast-path only for: high priority (danger), pre-emptive crafting, stuck escape.
             action_str = ""
             use_fast_path = (
-                decision.priority >= 0.7  # urgent (mob attack, night, danger)
+                decision.priority >= 0.9  # only real emergencies (mob attack, critical danger)
                 or decision.action_hint in ("craft",)  # crafting is deterministic
                 or (hasattr(self, '_stuck_positions') and len(getattr(self, '_stuck_positions', [])) > 0)
             )
