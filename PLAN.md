@@ -11,37 +11,61 @@
 
 ## Architecture Review (2026-06-25)
 
-### Generative Agents: Paper vs Implementation
+### Generative Agents (Park et al. 2023): Paper vs Implementation
 
-| Paper Concept | Implementation | Grade |
-|--------------|----------------|-------|
-| **Memory Stream** — record all experiences as natural language | ✅ SQLite + ChromaDB, embedding-based | Good |
-| **Retrieval** — weighted by recency × relevance × importance | 🟡 Only n=3 recent memories; no importance scoring | Basic |
-| **Reflection** — periodic synthesis into higher-level insights | ✅ Reflection class, fires every ~10 ticks | Seldom consulted in decisions |
-| **Planning** — daily plan → hourly segments → actions | 🟡 plan_daily() exists but no temporal decomposition | Fast-path constantly overrides plan |
-| **Observation** — structured world perception | ✅ WorldObserver (80 blocks, biomes, entities) | Good |
+| Paper Concept | Unsere Implementierung | Status | Lücke |
+|--------------|----------------------|--------|-------|
+| **Memory Stream** — alle Erfahrungen als natürliche Sprache speichern | ✅ SQLite + ChromaDB, embedding-basiert | ✅ Gut | — |
+| **Retrieval** — gewichtet nach recency × relevance × importance (Poignancy 1-10 via LLM, exponential decay 0.995^h, Embedding-Cosinus) | 🟡 Nur n=3 letzte Memories; kein Importance-Scoring, kein Decay | ⚠️ Grundlegend | Importance-Scoring fehlt komplett; Retrieval-Formel nicht implementiert |
+| **Reflection** — Synthese zu höherwertigen Einsichten (ausgelöst wenn ∑importance > 150, generiert Fragen, Baum-Struktur: Beobachtung → Reflexion → Meta-Reflexion) | 🟡 Reflection-Klasse vorhanden, feuert alle ~10 Ticks | ⚠️ Vorhanden, aber wirkungslos | Kein Importance-Trigger, keine Frage-Generierung, Reflexionen fließen nicht zurück in Entscheidungen |
+| **Planning** — hierarchische Zerlegung: Tagesplan → Stundenblöcke → 5-15 Min Aktionen; reaktives Umplanen bei unerwarteten Ereignissen | 🟡 plan_daily() existiert, aber keine temporale Zerlegung | ⚠️ Grundlegend | Keine Stunden-/Minutenblöcke, kein reaktives Umplanen; Fast-Path überschreibt Plan zu ~80% |
+| **Observation** — strukturierte Weltwahrnehmung mit Aufmerksamkeitssteuerung | ✅ WorldObserver (80 Blöcke, Biome, Entities) | ✅ Gut | — |
+| **Agent-Konversation** — Agenten initiieren/führen/beenden Gespräche basierend auf Beziehungen | ❌ Nicht implementiert (Single-Agent) | ❌ Fehlt | Voraussetzung für Multi-Agent (Phase 4) |
+| **Emergente soziale Dynamiken** — Informationsdiffusion, spontane Events (z.B. Valentine's Day Party) | ❌ Nicht möglich (Single-Agent) | ❌ Fehlt | Erst mit Multi-Agent + funktionierendem Planning testbar |
 
-### PIANO: Paper vs Implementation
+### PIANO / Project Sid (Altera.AL 2024): Paper vs Implementation
 
-| Paper Concept | Implementation | Grade |
-|--------------|----------------|-------|
-| **Cognitive Controller** — bottleneck for coherence | ✅ Synthesizes Perception + Memory + Goals | Often bypassed by Reflex Layer |
-| **Parallel Information Aggregation** — simultaneous inputs | 🟡 Modules polled sequentially, not parallel | asyncio structure present |
-| **Action Awareness** — expected vs actual comparison | ✅ Learns from discrepancies, blacklists repeat failures | Good |
-| **Social Awareness** — directed sentiment graph | 🟡 Data structure exists, unused (single agent) | Phase 4 |
-| **Skill Execution** — translate to Minecraft mechanics | ✅ 9 action types, tool-aware mining, block animation | Extensive |
-| **Role Specialization** — agents develop roles | ❌ Not implemented | Phase 4 |
-| **Collective Rules** — constitution, voting, taxation | ❌ Not implemented | Phase 4 |
-| **Cultural Transmission** — memes, religion, values | ❌ Not implemented | Phase 4 |
+| Paper Concept | Unsere Implementierung | Status | Lücke |
+|--------------|----------------------|--------|-------|
+| **Cognitive Controller (CC)** — Informations-Bottleneck für kohärente Entscheidungen; konditioniert alle Output-Module | ✅ Synthesiert Perception + Memory + Goals | 🟡 Teilweise | CC wird zu oft vom Reflex Layer umgangen; kein "strong conditioning" der Output-Module |
+| **10 parallele Module** — Memory, Action Awareness, Goal Generation, Social Awareness, Talking, Skill Execution + 4 weitere, laufen auf verschiedenen Zeitskalen | 🟡 ~6 Module vorhanden, sequentiell gepollt | ⚠️ Grundlegend | Module nicht wirklich parallel; asyncio-Struktur vorhanden aber ungenutzt |
+| **Action Awareness** — Soll/Ist-Vergleich, verhindert Halluzinations-Kaskaden | ✅ Lernt aus Diskrepanzen, blacklistet Wiederholungsfehler | ✅ Gut | — |
+| **Social Awareness** — gerichteter Sentiment-Graph (Pearson r=0.807 bei 5+ Beobachtern); asymmetrische Beziehungen | 🟡 Datenstruktur existiert, ungenutzt (Single-Agent) | ⚠️ Skeleton | Kein Sentiment-Tracking, keine Beziehungsdynamik |
+| **Skill Execution** — Mining, Crafting, Smelting, Animal Husbandry, Combat, Navigation, Trading | ✅ 9 Aktionstypen, Tool-aware Mining, Block-Animation, Crafting-Chains | ✅ Sehr gut | Smelting + Animal Husbandry + Trading fehlen |
+| **Goal Generation** — soziale + individuelle Ziele alle 5-10s basierend auf Beobachtung anderer | ✅ 2 Zieltypen (economic, survival) | 🟡 Teilweise | Keine sozialen Ziele, keine Beobachtung anderer Agenten |
+| **Talking Module** — Sprach-Interpretation und -Generierung für Inter-Agent-Kommunikation | ❌ Nicht implementiert | ❌ Fehlt | Voraussetzung für Social Awareness + Collective Rules |
+| **Role Specialization** — Rollen emergieren aus sozialen Zielen + 5-Goal-Window (Farmer, Miner, Guard, Builder, Explorer...) | ❌ Nicht implementiert | ❌ Phase 4 | Benötigt Social Awareness + Multi-Agent |
+| **Collective Rules** — Verfassung, Abstimmung (bei t=420s), Steuern (20%), 25 Constituents + 3 Influencer + 1 Election Manager | ❌ Nicht implementiert | ❌ Phase 4 | Benötigt Talking + Multi-Agent |
+| **Cultural Transmission** — Meme-Propagation (Konversation → Keywords), Religion (Pastafarianism-Experiment: Priester → direkte + indirekte Konvertiten) | ❌ Nicht implementiert | ❌ Phase 4 | Benötigt Talking + Social Awareness |
+| **Skalierung** — 500 Agenten / 9000s, bis 1000+ | ❌ Nur 1 Agent | ❌ Phase 4 | Architektur-Engpass: ein Python-Prozess pro Agent |
 
-### Key Finding
+### Gesamtbewertung
 
-The **Reflex Layer** (fast-path) has grown so much that it dominates the LLM planning flow
-(Perception → Retrieval → Plan → Execute). The Generative Agents paper emphasizes:
-*"Planning, reflection, and observation each contribute critically to the believability
-of agent behavior."* Our agent relies ~80% on deterministic rules and ~20% on LLM planning.
+| Bereich | Abdeckung | Anmerkung |
+|---------|-----------|-----------|
+| **Generative Agents** | ~45% | Memory Stream + Observation gut; Retrieval/Reflection/Planning nur als Skelett; kein Multi-Agent |
+| **Project Sid / PIANO** | ~30% | Action Awareness + Skill Execution stark; CC vorhanden aber untergraben; Social/Collective/Cultural komplett offen |
+| **Gesamt-Zielerreichung** | ~35% | Solide Single-Agent-Grundlage, aber die Paper-definierten Kernmechanismen (Importance-basiertes Retrieval, hierarchisches Planning, Inter-Agent-Kommunikation) fehlen oder sind wirkungslos |
 
-**Recommendation for Phase 4**: Thin out fast-path, strengthen LLM planning pipeline.
+### Kritische Befunde
+
+1. **Reflex Layer dominiert LLM-Pipeline (~80/20)**: Die Generative Agents Ablation-Studie zeigt, dass Planning, Reflection und Observation *jeweils kritisch* für glaubwürdiges Verhalten sind. Unser Fast-Path umgeht diese Komponenten systematisch, was die Architektur de facto zu einem regelbasierten System mit gelegentlichem LLM-Aufruf reduziert.
+
+2. **Retrieval ist der größte Einzelmangel**: Ohne Importance-Scoring (Poignancy 1-10), ohne exponentielles Decay, ohne gewichtete Kombination mit Embedding-Relevanz kann der Agent keine kontextuell passenden Erinnerungen abrufen. Das Paper nutzt `score = α·recency + β·relevance + γ·importance` — wir nutzen nur "die letzten 3".
+
+3. **Reflection ohne Rückkopplung**: Die Reflection-Klasse erzeugt Einsichten, aber diese fließen nicht zurück in den Entscheidungsprozess. Im Paper bilden Reflexionen einen Baum (Beobachtungen → Reflexionen → Meta-Reflexionen), der bei Retrieval bevorzugt wird.
+
+4. **Planning ohne temporale Struktur**: `plan_daily()` erzeugt einen Tagesplan, aber keine Stunden-/Minutenblöcke. Der Plan wird nicht reaktiv angepasst, und der Fast-Path überschreibt ihn in den meisten Fällen.
+
+5. **Single-Agent-Limit**: Sowohl Generative Agents (25 Agenten) als auch Project Sid (500-1000+) definieren Multi-Agent-Interaktion als Kern des Systems. Ohne Multi-Agent können Social Awareness, Collective Rules, Cultural Transmission und emergente Dynamiken nicht entstehen.
+
+### Empfehlungen (Priorität)
+
+1. **Retrieval-Formel implementieren** (Phase 2 Completion): Importance-Scoring via LLM, exponential decay, gewichtete Kombination → größter Impact auf Agent-Qualität
+2. **Planning hierarchisch machen** (Phase 2 Completion): Tagesplan → Stundenblöcke → 5-15 Min Aktionen; Fast-Path nur für Notfälle (Mob-Angriff, Nacht)
+3. **Reflection in Retrieval einbinden** (Phase 2 Completion): Reflexionen als hochwertige Memories in Retrieval einbeziehen
+4. **Fast-Path reduzieren** (Phase 3→4 Übergang): Nur für unmittelbare Gefahren beibehalten, Rest über LLM-Pipeline
+5. **Talking Module + Multi-Agent** (Phase 4 Start): Voraussetzung für alle Civilization-Features
 
 ---
 
@@ -150,21 +174,21 @@ minecraft-valis/
 4. ✅ Establish WebSocket bridge between plugin and agent brain
 5. ✅ Spawn first AI-controlled NPC agent in the world
 
-### Phase 2: Core Agent Architecture (Generative Agents) ✅ 85%
+### Phase 2: Core Agent Architecture (Generative Agents) 🟡 60%
 6. ✅ Perception module — capture world state (80 blocks, radius 12)
 7. ✅ Memory Stream — associative memory with embeddings (SQLite + ChromaDB)
-8. 🟡 Retrieval — weighted by recency + relevance (no importance scoring yet)
-9. 🟡 Planning — daily schedules + moment-to-moment action selection (no temporal decomposition: "go to X at 10am, mine at 11am" missing)
-10. ✅ Reflection — synthesize memories into higher-level insights (~18 cycles/session)
-11. ✅ Skill Execution — 9 action types (move_to, mine_block, place_block, craft auto-chain, attack_mob, collect_items, equip, teleport, idle). Tool-aware mining. Block-breaking animation.
+8. 🟡 Retrieval — nur n=3 letzte Memories; **fehlt**: Importance-Scoring (Poignancy 1-10), exponential decay, gewichtete Formel (α·recency + β·relevance + γ·importance)
+9. 🟡 Planning — plan_daily() existiert, **fehlt**: temporale Zerlegung (→ Stunden → 5-15 Min), reaktives Umplanen; Fast-Path überschreibt Plan ~80%
+10. 🟡 Reflection — Klasse vorhanden (~18 Zyklen/Session), **fehlt**: Importance-Trigger (∑importance > 150), Frage-Generierung, Rückkopplung in Retrieval/Entscheidungen
+11. ✅ Skill Execution — 9 Aktionstypen (move_to, mine_block, place_block, craft auto-chain, attack_mob, collect_items, equip, teleport, idle). Tool-aware Mining. Block-Breaking Animation.
 12. ✅ Agent loop — perceive → controller → plan → reflect → execute
 
-### Phase 3: PIANO Enhancements (Project Sid) ✅ 60%
-13. ✅ Concurrent module execution (asyncio)
-14. ✅ Cognitive Controller — bottlenecked decision-making for coherence
+### Phase 3: PIANO Enhancements (Project Sid) 🟡 40%
+13. 🟡 Concurrent module execution — asyncio-Struktur vorhanden, Module aber sequentiell gepollt (Paper: parallel auf verschiedenen Zeitskalen)
+14. 🟡 Cognitive Controller — Bottleneck vorhanden, wird aber vom Reflex Layer zu oft umgangen (Paper: CC "strongly conditions" alle Output-Module)
 15. ✅ Action Awareness — compare expected vs actual outcomes, blacklist repeat failures
-16. 🟡 Social Awareness — directed sentiment graph between agents (data structure exists, unused — single agent)
-17. ✅ Goal Generation — create objectives from experiences (2 goal types: economic, survival)
+16. 🟡 Social Awareness — directed sentiment graph (Skeleton, ungenutzt — single agent)
+17. 🟡 Goal Generation — 2 Zieltypen (economic, survival); **fehlt**: soziale Ziele basierend auf Beobachtung anderer Agenten
 
 ### Phase 4: Multi-Agent Civilization 🔲 0%
 18. 🔲 Personality & Trait system
@@ -183,8 +207,8 @@ minecraft-valis/
 ## Verification Criteria
 
 - **Phase 1**: ✅ Server starts, plugin loads, WebSocket connects, single NPC spawns
-- **Phase 2**: ✅ Agent performs full day-night cycle, executes Minecraft actions; 🟡 planning uses LLM but lacks temporal decomposition
-- **Phase 3**: ✅ Controller + ActionAwareness + GoalGen functional; 🟡 SocialAwareness unused (single agent)
+- **Phase 2**: 🟡 Agent performs full day-night cycle, executes Minecraft actions; Retrieval/Planning/Reflection als Skelett vorhanden aber nicht paper-konform (keine Importance-Formel, keine temporale Zerlegung, keine Reflexions-Rückkopplung)
+- **Phase 3**: 🟡 Controller + ActionAwareness + GoalGen funktional; CC wird vom Reflex Layer untergraben; Module nicht wirklich parallel; SocialAwareness ungenutzt
 - **Phase 4**: 🔲 2+ agents coexist, specialize in roles, participate in governance, propagate culture
 - **Phase 5**: 🟡 Debug logs comprehensive; dashboard/config pending
 
