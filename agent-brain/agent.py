@@ -1029,8 +1029,8 @@ Respond ONLY with valid JSON:
             _stuck_list = getattr(self, '_stuck_positions', [])
             _actually_stuck = (len(_stuck_list) >= 5 and len(set(_stuck_list[-5:])) == 1)
             use_fast_path = (
-                decision.priority >= 0.9  # only real emergencies (mob attack, critical danger)
-                or decision.action_hint in ("craft",)  # crafting is deterministic
+                decision.action_hint in ("craft",)  # crafting is deterministic
+                or (decision.priority >= 0.9 and decision.action_hint in ("attack", "flee"))
                 or _actually_stuck  # only when genuinely stuck at same position for 5+ ticks
             )
             parsed = None

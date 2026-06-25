@@ -66,7 +66,10 @@ class Reflection:
 
             insight = await self._synthesize_insight(agent, focal_pt, memories)
             if insight:
-                importance = await agent.memory.score_importance(insight)
+                recent_thoughts = agent.memory.get_recent(n=5, node_type="thought")
+                importance = await self._score_with_novelty(
+                    agent, insight, recent_thoughts
+                )
                 await agent.memory.add_thought(
                     content=insight,
                     importance=importance,
@@ -117,6 +120,45 @@ class Reflection:
                 f"Consider what {agent.name} learned from: {event.content[:150]}"
             )
         return focal_points[:3]
+
+    async def _score_with_novelty(
+        self,
+        agent: "ValisAgent",
+        insight: str,
+        recent_thoughts: list,
+    ) -> float:
+        """Score importance with novelty penalty for repetitive insights."""
+        if recent_thoughts:
+            thought_text = "\n".join(
+                f"- {t.content[:150]}" for t in recent_thoughts[:5]
+            )
+            prompt = (
+                "Rate the importance AND novelty of this Minecraft agent insight "
+                "on a scale of 1-10. Use the FULL range:\n"
+                "  1-2: Repetitive or trivial (restates something already known)\n"
+                "  3-4: Minor or partially redundant observation\n"
+                "  5-6: Moderately useful new learning\n"
+                "  7-8: Significant new strategy or important lesson\n"
+                "  9-10: Critical breakthrough or fundamental new understanding\n\n"
+                "IMPORTANT: If the new insight says essentially the same thing as "
+                "a recent thought (even in different words), rate it 1-3.\n\n"
+                f"Recent thoughts the agent already has:\n{thought_text}\n\n"
+                f"New insight to rate: \"{insight[:300]}\"\n\n"
+                "Respond with ONLY the number."
+            )
+            try:
+                response = await agent.llm.chat([
+                    {"role": "system", "content": "Rate insight novelty and importance 1-10. Duplicates of existing thoughts score 1-3. Output only a number."},
+                    {"role": "user", "content": prompt},
+                ])
+                import re
+                match = re.search(r'(\d+)', response.strip())
+                if match:
+                    raw = int(match.group(1))
+                    return max(0.1, min(1.0, raw / 10.0))
+            except Exception as e:
+                logger.warning(f"Novelty scoring failed: {e}")
+        return await agent.memory.score_importance(insight)
 
     async def _synthesize_insight(
         self,
