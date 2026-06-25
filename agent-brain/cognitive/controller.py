@@ -99,7 +99,9 @@ Output ONLY JSON:
 {{"intent": "what and where", "reason": "why (1 sentence)", "priority": 0-10, "action_hint": "mine|craft|...", "chat_hint": ""}}"""
 
         import json, re
-        for attempt in range(2):
+        decision = None
+        max_attempts = 3
+        for attempt in range(max_attempts):
             try:
                 response = await agent.llm.chat([
                     {"role": "system", "content": "You are a decision-making module. Output only JSON."},
@@ -108,6 +110,8 @@ Output ONLY JSON:
 
                 # Extract JSON from response (may be wrapped in markdown or have preamble)
                 json_str = response.strip()
+                if not json_str:
+                    raise ValueError(f"Empty response from LLM (attempt {attempt + 1}/{max_attempts})")
                 # Remove markdown code fences
                 json_str = re.sub(r'^```(?:json)?\s*', '', json_str)
                 json_str = re.sub(r'\s*```$', '', json_str)
@@ -117,7 +121,7 @@ Output ONLY JSON:
                 if brace_start >= 0 and brace_end > brace_start:
                     json_str = json_str[brace_start:brace_end + 1]
                 if not json_str:
-                    raise ValueError("Empty response from LLM")
+                    raise ValueError("No JSON object found in response")
                 data = json.loads(json_str)
 
                 decision = ControllerDecision(
@@ -130,18 +134,20 @@ Output ONLY JSON:
                 )
                 break  # Success
             except Exception as e:
-                if attempt == 0:
-                    logger.warning(f"Controller JSON parse failed (retrying): {e}")
+                if attempt < max_attempts - 1:
+                    logger.warning(f"Controller JSON parse failed (attempt {attempt + 1}/{max_attempts}): {e}")
                     prompt += "\n\nIMPORTANT: Output ONLY valid JSON. No markdown, no explanation, just the JSON object."
                 else:
-                    logger.warning(f"Controller decision failed, using fallback: {e}")
-                    decision = ControllerDecision(
-                        intent="Explore the area and gather resources",
-                        reason="Default exploration behavior",
-                        priority=0.5,
-                        action_hint="explore",
-                        chat_hint="",
-                    )
+                    logger.warning(f"Controller decision failed after {max_attempts} attempts, using fallback: {e}")
+
+        if decision is None:
+            decision = ControllerDecision(
+                intent="Explore the area and gather resources",
+                reason="Default exploration behavior (LLM unavailable)",
+                priority=0.5,
+                action_hint="explore",
+                chat_hint="",
+            )
 
         self.last_decision = decision
         self.decision_history.append(decision)

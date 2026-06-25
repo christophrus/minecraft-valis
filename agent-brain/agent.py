@@ -114,6 +114,8 @@ class ValisAgent:
         # Action state
         self._crafting_table_placed = False  # Prevent re-placing after successful placement
         self._recently_crafted: dict[str, float] = {}  # Track recent crafts to avoid duplicate due to inv lag
+        self._failed_actions: dict[str, int] = {}  # Track repeated failures to avoid retrying (e.g. "place:stick")
+        self._craft_idle_streak: int = 0  # Count consecutive craft→idle cycles to break deadlocks
 
         logger.info(f"Agent created: {self.name} ({self.personality}) [{self.agent_id}]")
 
@@ -153,8 +155,8 @@ class ValisAgent:
                     intent_target = b
                     break
             if not intent_target:
-                # Block not in perception, but still navigate there
-                intent_target = {"x": ix, "y": iy, "z": iz, "type": "UNKNOWN"}
+                # Block not in perception — only use as nav target, not mine target
+                intent_target = {"x": ix, "y": iy, "z": iz, "type": "UNKNOWN", "_nav_only": True}
 
         # --- Recently mined / placed / failed-place / crafted tracking ---
         if not hasattr(self, '_recently_mined'):
@@ -169,7 +171,9 @@ class ValisAgent:
         self._recently_mined = {k: v for k, v in self._recently_mined.items() if now - v < 5}
         self._recently_placed = {k: v for k, v in self._recently_placed.items() if now - v < 120}
         self._recently_failed_place = {k: v for k, v in self._recently_failed_place.items() if now - v < 10}
-        self._recently_crafted = {k: v for k, v in self._recently_crafted.items() if now - v < 15}
+        # Shorter cooldown (5s instead of 15s) — prevents deadlocks where craft fails
+        # and the agent idles for 15 seconds before retrying
+        self._recently_crafted = {k: v for k, v in self._recently_crafted.items() if now - v < 5}
         def pos_key(b): return f"{b.get('x',0)},{b.get('y',0)},{b.get('z',0)}"
 
         # --- PRE-EMPTIVE CRAFTING CHECK ---
@@ -233,6 +237,7 @@ class ValisAgent:
             item = craft_action.params.get("item", "")
             if item:
                 self._recently_crafted[item] = time.time()
+            self._craft_idle_streak = 0  # Reset idle streak on successful craft dispatch
             return craft_action
 
         # --- CRAFTING TABLE: place if we have one but none nearby ---
@@ -253,6 +258,18 @@ class ValisAgent:
                 self._crafting_table_placed = True
                 return AgentAction(agent_name="", action="place_block",
                                    params={"block_type": "crafting_table", "x": tx, "y": ty, "z": tz})
+
+        # --- NON-PLACEABLE ITEMS: never try to place these ---
+        NON_PLACEABLE = frozenset({
+            "stick", "wheat_seeds", "string", "flint", "feather", "bone",
+            "arrow", "coal", "charcoal", "iron_ingot", "gold_ingot", "diamond",
+            "emerald", "lapis_lazuli", "redstone", "bowl", "paper", "book",
+            "compass", "clock", "fishing_rod", "shears", "lead", "name_tag",
+            "saddle", "leather", "raw_iron", "raw_gold", "raw_copper",
+            "wooden_pickaxe", "stone_pickaxe", "iron_pickaxe", "wooden_axe",
+            "stone_axe", "iron_axe", "wooden_sword", "stone_sword", "iron_sword",
+            "wooden_shovel", "stone_shovel", "iron_shovel", "wooden_hoe",
+        })
 
         if hint in ("mine", "place"):
             target = None
@@ -366,17 +383,23 @@ class ValisAgent:
                                 logger.debug(f"FAST-PATH: mine target too far ({dist_to_target:.0f}m), navigate (attempt {attempts}/3)")
                             pass  # Fall through to move/explore
                         else:
-                            self._recently_mined[tkey] = now
-                            return AgentAction(agent_name="", action="mine_block", params={"x": int(tx), "y": int(ty), "z": int(tz)})
+                            # Don't mine UNKNOWN/nav-only targets — they're not verified in perception
+                            if target.get("_nav_only") or target_type in ("UNKNOWN", "AIR", "CAVE_AIR", "VOID_AIR"):
+                                logger.debug(f"FAST-PATH: skip mine of unverified/air block {target_type} at ({int(tx)},{int(ty)},{int(tz)})")
+                            else:
+                                self._recently_mined[tkey] = now
+                                return AgentAction(agent_name="", action="mine_block", params={"x": int(tx), "y": int(ty), "z": int(tz)})
                 else:
                     inv = perception.inventory
                     place_mat = "dirt"
                     if inv:
-                        placeable = {k:v for k,v in inv.items() 
-                            if k.lower() not in ("air", "wheat_seeds", "cornflower",
+                        placeable = {k:v for k,v in inv.items()
+                            if k.lower() not in NON_PLACEABLE
+                            and k.lower() not in ("air", "cornflower",
                             "oak_log", "spruce_log", "birch_log", "jungle_log", "acacia_log",
                             "dark_oak_log", "cherry_log", "mangrove_log",
-                            "oak_wood", "spruce_wood", "birch_wood")}
+                            "oak_wood", "spruce_wood", "birch_wood")
+                            and f"place:{k.lower()}" not in self._failed_actions}
                         if placeable:
                             place_mat = max(placeable, key=placeable.get)
                     # Find free air above target, skip recently placed/failed Y levels
@@ -468,9 +491,16 @@ class ValisAgent:
             return AgentAction(agent_name="", action="collect_items")
 
         if hint == "craft":
-            # Pre-emptive craft check already ran above — if nothing was craftable, don't ask LLM.
-            # LLM doesn't know exact inventory and always responds with move_to, wasting cycles.
-            logger.debug(f"FAST-PATH: craft hint but nothing to craft, idling")
+            # Pre-emptive craft check already ran above — if nothing was craftable, count idle streak.
+            # After 3 consecutive craft→idle cycles, clear cooldowns to break deadlocks.
+            self._craft_idle_streak += 1
+            if self._craft_idle_streak >= 3:
+                logger.warning(f"FAST-PATH: craft→idle deadlock detected ({self._craft_idle_streak}× idle). Clearing craft cooldowns.")
+                self._recently_crafted.clear()
+                self._craft_idle_streak = 0
+                # Re-run pre-emptive craft check with cleared cooldowns
+                return self._decision_to_action(decision, perception)
+            logger.debug(f"FAST-PATH: craft hint but nothing to craft, idling (streak={self._craft_idle_streak})")
             return AgentAction(agent_name="", action="idle")
 
         if hint in ("move", "explore", "mine", "place"):
@@ -509,29 +539,16 @@ class ValisAgent:
                                     self._recently_mined[tkey] = now
                                     return AgentAction(agent_name="", action="mine_block",
                                                        params={"x": px+dx, "y": py+dy, "z": pz+dz})
-                # If 4 dig attempts found nothing useful, try emergency help before random jump
+                # If 4 dig attempts found nothing useful, teleport to safe ground immediately
                 if self._stuck_mine_attempts >= 4:
                     self._stuck_mine_attempts = 0
-                    # Collect surroundings for LLM context
-                    nearby = blocks[:12]
-                    surr_text = ", ".join(
-                        f"{b.get('type','?')} at ({b.get('x',0)},{b.get('y',0)},{b.get('z',0)})"
-                        for b in nearby
-                    )[:300]
-                    failures = self.action_awareness.get_recent_discrepancies(n=3) if hasattr(self, 'action_awareness') else []
-                    fail_text = "; ".join(failures) if failures else "none"
-                    # Schedule emergency help — we can't await in _decision_to_action (sync),
-                    # so set a flag for cognitive_tick to pick up on next iteration
-                    self._pending_emergency = {
-                        "type": "STUCK",
-                        "context": {
-                            "position": {"x": px, "y": py, "z": pz},
-                            "description": f"Agent stuck at ({px},{py},{pz}) for 5+ ticks. STUCK-DIG found nothing minable in 4 directions.",
-                            "inventory": inv,
-                            "failures": fail_text,
-                            "surroundings": surr_text,
-                        }
-                    }
+                    # Direct teleport to ground level — much more reliable than random jumps
+                    safe_y = 64  # Sea level, usually safe ground
+                    logger.warning(f"FAST-PATH: STUCK-ESCAPE teleporting from ({px},{py},{pz}) to ({px},{safe_y},{pz})")
+                    self._nav_target = None
+                    self._stuck_positions = []
+                    return AgentAction(agent_name="", action="teleport",
+                                       params={"x": px, "y": safe_y, "z": pz})
                 self._nav_target = None
                 self._explore_heading = None
                 self._explore_steps = 0
@@ -705,6 +722,23 @@ class ValisAgent:
         if record and record.discrepancy:
             await self.action_awareness.learn_from_discrepancy(self, record)
             logger.info(f"Agent {self.name} learned: {record.discrepancy}")
+
+        # Track repeated failures to avoid retrying the same broken action
+        if not result.success:
+            fail_key = f"{result.action}:{result.details.split(' ')[-1] if result.details else 'unknown'}"
+            # For place_block failures, track the material (e.g. "place:stick")
+            if "not a placeable block" in (result.details or ""):
+                import re
+                mat_match = re.search(r'(\w+) is not a placeable', result.details)
+                if mat_match:
+                    fail_key = f"place:{mat_match.group(1)}"
+            # For mine_block failures on AIR, track the action
+            elif "cannot mine AIR" in (result.details or ""):
+                fail_key = "mine:AIR"
+            self._failed_actions[fail_key] = self._failed_actions.get(fail_key, 0) + 1
+            if self._failed_actions[fail_key] >= 3:
+                logger.warning(f"Agent {self.name}: action '{fail_key}' failed {self._failed_actions[fail_key]}× — blacklisted for session")
+
         logger.info(f"Agent {self.name} action result: {result.action} -> {'OK' if result.success else 'FAIL'}: {result.details}")
         self._perception_event.set()  # Wake cognitive loop to process result
 
@@ -823,32 +857,17 @@ Respond ONLY with valid JSON:
                 self._last_move_info = {}  # Reset tracker on position change
             elif ticks_since >= 3 and elapsed > 4:
                 logger.warning(f"NAV-STALL: no movement for {ticks_since} ticks ({elapsed:.1f}s) since move_to target=({lmi['target'][0]},{lmi['target'][1]},{lmi['target'][2]}), still at ({cpx:.0f},{cpy:.0f},{cpz:.0f})")
-                # After 8+ ticks of stall, ask LLM for emergency help
+                # After 5+ ticks of stall, teleport to safe ground immediately
+                # (LLM emergency help is too slow and often gives bad suggestions)
                 if ticks_since >= 5 and self._last_move_info:
-                    # Collect recent failures
-                    failures = self.action_awareness.get_recent_discrepancies(n=3)
-                    fail_text = "; ".join(failures) if failures else "none"
-                    # Collect surroundings (top 8 blocks near agent)
-                    nearby = perception.nearby_blocks[:12] if perception else []
-                    surr_text = ", ".join(
-                        f"{b.get('type','?')} at ({b.get('x',0)},{b.get('y',0)},{b.get('z',0)})"
-                        for b in nearby
-                    )[:300]
-                    emergency_action = await self._emergency_help("NAV_STALL", {
-                        "position": {"x": cpx, "y": cpy, "z": cpz},
-                        "description": f"Agent hasn't moved from ({cpx:.0f},{cpy:.0f},{cpz:.0f}) for {ticks_since} ticks ({elapsed:.0f}s) while navigating to ({lmi['target'][0]},{lmi['target'][1]},{lmi['target'][2]})",
-                        "inventory": perception.inventory if perception else {},
-                        "failures": fail_text,
-                        "surroundings": surr_text,
-                        "nav_target": f"({lmi['target'][0]},{lmi['target'][1]},{lmi['target'][2]})",
-                    })
-                    if emergency_action:
-                        logger.info(f"EMERGENCY-HELP: overriding action with LLM suggestion: {emergency_action.action} {emergency_action.params}")
-                        action_str = ""
-                        # Reset stall tracking
-                        self._last_move_info = {}
-                        self._nav_target = None
-                        return emergency_action
+                    safe_y = 64
+                    logger.warning(f"NAV-STALL-ESCAPE: teleporting from ({cpx:.0f},{cpy:.0f},{cpz:.0f}) to ground level y={safe_y}")
+                    self._last_move_info = {}
+                    self._nav_target = None
+                    if hasattr(self, '_stuck_positions'):
+                        self._stuck_positions = []
+                    return AgentAction(agent_name=self.name, action="teleport",
+                                       params={"x": int(cpx), "y": safe_y, "z": int(cpz)})
 
         try:
             # Step 0: Handle pending emergency from stuck detection (sync→async bridge)
@@ -1086,7 +1105,8 @@ class AgentManager:
         agent = self.agents.get(perception.agent_name)
         if agent:
             agent.receive_perception(perception)
-            logger.debug(f"Perception delivered to {perception.agent_name} (tick {perception.tick})")
+            if perception.tick % 50 == 0:
+                logger.debug(f"Perception delivered to {perception.agent_name} (tick {perception.tick})")
         else:
             # Don't auto-create if recently despawned (race condition)
             if perception.agent_name in self._despawned_recently:
