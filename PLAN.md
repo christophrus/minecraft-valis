@@ -5,7 +5,45 @@
 ## References
 
 - **Generative Agents**: https://arxiv.org/abs/2304.03442 — Memory Stream, Reflection, Planning, Observation
-- **Project Sid**: https://arxiv.org/abs/2411.00114 — PIANO Architecture (Parallel Information Aggregation via Neural Orchestration)
+- **Project Sid / PIANO**: https://arxiv.org/abs/2411.00114 — PIANO Architecture (Parallel Information Aggregation via Neural Orchestration), Cognitive Controller, Social Awareness, Civilization mechanics
+
+---
+
+## Architecture Review (2026-06-25)
+
+### Generative Agents: Paper vs Implementation
+
+| Paper Concept | Implementation | Grade |
+|--------------|----------------|-------|
+| **Memory Stream** — record all experiences as natural language | ✅ SQLite + ChromaDB, embedding-based | Good |
+| **Retrieval** — weighted by recency × relevance × importance | 🟡 Only n=3 recent memories; no importance scoring | Basic |
+| **Reflection** — periodic synthesis into higher-level insights | ✅ Reflection class, fires every ~10 ticks | Seldom consulted in decisions |
+| **Planning** — daily plan → hourly segments → actions | 🟡 plan_daily() exists but no temporal decomposition | Fast-path constantly overrides plan |
+| **Observation** — structured world perception | ✅ WorldObserver (80 blocks, biomes, entities) | Good |
+
+### PIANO: Paper vs Implementation
+
+| Paper Concept | Implementation | Grade |
+|--------------|----------------|-------|
+| **Cognitive Controller** — bottleneck for coherence | ✅ Synthesizes Perception + Memory + Goals | Often bypassed by Reflex Layer |
+| **Parallel Information Aggregation** — simultaneous inputs | 🟡 Modules polled sequentially, not parallel | asyncio structure present |
+| **Action Awareness** — expected vs actual comparison | ✅ Learns from discrepancies, blacklists repeat failures | Good |
+| **Social Awareness** — directed sentiment graph | 🟡 Data structure exists, unused (single agent) | Phase 4 |
+| **Skill Execution** — translate to Minecraft mechanics | ✅ 9 action types, tool-aware mining, block animation | Extensive |
+| **Role Specialization** — agents develop roles | ❌ Not implemented | Phase 4 |
+| **Collective Rules** — constitution, voting, taxation | ❌ Not implemented | Phase 4 |
+| **Cultural Transmission** — memes, religion, values | ❌ Not implemented | Phase 4 |
+
+### Key Finding
+
+The **Reflex Layer** (fast-path) has grown so much that it dominates the LLM planning flow
+(Perception → Retrieval → Plan → Execute). The Generative Agents paper emphasizes:
+*"Planning, reflection, and observation each contribute critically to the believability
+of agent behavior."* Our agent relies ~80% on deterministic rules and ~20% on LLM planning.
+
+**Recommendation for Phase 4**: Thin out fast-path, strengthen LLM planning pipeline.
+
+---
 
 ## Architecture Overview
 
@@ -105,69 +143,73 @@ minecraft-valis/
 
 ## Phased Implementation Plan
 
-### Phase 1: Foundation ✅
+### Phase 1: Foundation ✅ 100%
 1. ✅ Set up PaperMC server (JDK 21, world config)
 2. ✅ Create plugin skeleton (valis-core) with Citizens2 + ProtocolLib
-3. ✅ Create Python agent brain service (FastAPI + asyncio)
+3. ✅ Create Python agent brain service (asyncio)
 4. ✅ Establish WebSocket bridge between plugin and agent brain
 5. ✅ Spawn first AI-controlled NPC agent in the world
 
-### Phase 2: Core Agent Architecture (Generative Agents) ✅
-6. ✅ Perception module — capture world state around each agent
+### Phase 2: Core Agent Architecture (Generative Agents) ✅ 85%
+6. ✅ Perception module — capture world state (80 blocks, radius 12)
 7. ✅ Memory Stream — associative memory with embeddings (SQLite + ChromaDB)
-8. ✅ Retrieval — weighted by recency, relevance, importance
-9. ✅ Planning — daily schedules + moment-to-moment action selection
-10. ✅ Reflection — synthesize memories into higher-level insights
-11. ✅ Skill Execution — translate plans to Minecraft mechanics
-    - move_to, mine_block, place_block, craft (auto-chain: log→plank→stick→pickaxe)
-    - attack_mob, collect_items
-12. ✅ Agent loop — perceive → retrieve → plan → reflect → execute
+8. 🟡 Retrieval — weighted by recency + relevance (no importance scoring yet)
+9. 🟡 Planning — daily schedules + moment-to-moment action selection (no temporal decomposition: "go to X at 10am, mine at 11am" missing)
+10. ✅ Reflection — synthesize memories into higher-level insights (~18 cycles/session)
+11. ✅ Skill Execution — 9 action types (move_to, mine_block, place_block, craft auto-chain, attack_mob, collect_items, equip, teleport, idle). Tool-aware mining. Block-breaking animation.
+12. ✅ Agent loop — perceive → controller → plan → reflect → execute
 
-### Phase 3: PIANO Enhancements (Project Sid) ✅
+### Phase 3: PIANO Enhancements (Project Sid) ✅ 60%
 13. ✅ Concurrent module execution (asyncio)
 14. ✅ Cognitive Controller — bottlenecked decision-making for coherence
-15. ✅ Action Awareness — compare expected vs actual outcomes
-16. ✅ Social Awareness — directed sentiment graph between agents
-17. ✅ Goal Generation — create objectives from experiences
+15. ✅ Action Awareness — compare expected vs actual outcomes, blacklist repeat failures
+16. 🟡 Social Awareness — directed sentiment graph between agents (data structure exists, unused — single agent)
+17. ✅ Goal Generation — create objectives from experiences (2 goal types: economic, survival)
 
-### Phase 4: Multi-Agent Civilization
+### Phase 4: Multi-Agent Civilization 🔲 0%
 18. 🔲 Personality & Trait system
-19. 🔲 Multi-agent orchestration (2-100 agents)
-20. 🔲 Role specialization emergence
+19. 🔲 Multi-agent orchestration (2–100 agents)
+20. 🔲 Role specialization (professions: lumberjack, miner, builder, farmer)
 21. 🔲 Collective rule system (constitution, voting, taxation)
-22. 🔲 Cultural transmission (memes + religion)
+22. 🔲 Cultural transmission (memes, religion, values)
+23. 🔲 Economy system (trade, currency, marketplaces)
 
-### Phase 5: Observability & Polish
-23. 🔲 Web dashboard
-24. 🔲 Configuration system (YAML/JSON)
-25. 🟡 Logging & debug (comprehensive debug logs active, NAV tracking, stuck detection)
-26. 🔲 Performance optimization
+### Phase 5: Observability & Polish 🟡 30%
+24. 🔲 Web dashboard
+25. 🔲 Configuration system (YAML/JSON)
+26. 🟡 Debug logging (comprehensive: NAV tracking, stuck detection, emergency help, action results, inventory snapshots)
+27. 🔲 Performance optimization
 
 ## Verification Criteria
 
 - **Phase 1**: ✅ Server starts, plugin loads, WebSocket connects, single NPC spawns
-- **Phase 2**: ✅ Agent performs full day-night cycle, executes Minecraft actions
-- **Phase 3**: ✅ Agent maintains coherence, learns from outcomes, tracks social sentiments
-- **Phase 4**: 🔲 2+ agents coexist, specialize, participate in governance, propagate culture
-- **Phase 5**: 🟡 Debug logging active, dashboard/config pending
+- **Phase 2**: ✅ Agent performs full day-night cycle, executes Minecraft actions; 🟡 planning uses LLM but lacks temporal decomposition
+- **Phase 3**: ✅ Controller + ActionAwareness + GoalGen functional; 🟡 SocialAwareness unused (single agent)
+- **Phase 4**: 🔲 2+ agents coexist, specialize in roles, participate in governance, propagate culture
+- **Phase 5**: 🟡 Debug logs comprehensive; dashboard/config pending
 
 ## Beyond Plan — Additional Features Built
 
 During Phase 2/3 implementation, several unplanned but necessary features were added:
 
-| Feature | Purpose |
-|---------|---------|
-| **Pre-emptive Crafting (Reflex Layer)** | Auto-crafts log→plank→stick→pickaxe without LLM involvement |
-| **Junk Filter + Overrides** | Prevents mining dirt when wood needed, but allows at night/from plan |
-| **Stuck Detection + Anti-Stuck Jump** | Detects 5+ ticks at same position, resets nav with random jump |
-| **Forest Heading Lock** | When forest biome nearby, locks explore heading for 20-30 steps |
-| **Leaves as Wood Indicator** | Counts *_LEAVES in `wood_in_perception`, navigates toward leaves |
-| **Far-Target Retry Loop** | After 3 attempts to reach same far block, falls back to nearest wood |
-| **Shelter Building (4-block ring)** | N/E/S/W block placement when plan mentions "shelter" |
-| **Crafting Table Auto-Place** | Places crafting_table at feet+1 when in inventory |
-| **Hunting (attack_mob + collect_items)** | Attacks nearest animal, collects dropped items |
-| **NAV Debug Tracking** | NAV-SEND/NAV-PROGRESS/NAV-STALL logs for pathfinder diagnostics |
-| **Controller Prompt v2** | Crafting recipes, hunt hint, clear decision rules in LLM prompt |
+| Feature | Purpose | Paper Reference |
+|---------|---------|----------------|
+| **Pre-emptive Crafting (Reflex Layer)** | Auto-crafts log→plank→stick→pickaxe→axe without LLM | Skill Execution (Sid) |
+| **Junk Filter + Overrides** | Prevents mining dirt when wood needed; allows at night/from plan | Observation Filter (GA) |
+| **Stuck Detection + Anti-Stuck Jump** | Detects 5+ ticks at same position; STUCK-DIG → anti-stuck jump | Error Recovery |
+| **Forest Heading Lock** | Locks explore heading for 20-30 steps when forest nearby | Exploration Heuristic |
+| **Leaves as Wood Indicator** | Counts *_LEAVES in `wood_in_perception`, navigates toward leaves | Perception Heuristic |
+| **Far-Target Retry Loop (3×)** | After 3 attempts to reach same far block, falls back to nearest | Plan Adaptation |
+| **Shelter Building (4-block ring)** | N/E/S/W block placement when plan mentions "shelter" | Skill Execution |
+| **Crafting Table Auto-Place** | Places crafting_table at feet+1 when in inventory | Reflex Automation |
+| **Hunting + Collect** | attack_mob → collect_items (auto-collects dropped items) | Skill Execution |
+| **NAV Debug Tracking** | NAV-SEND/PROGRESS/STALL/ESCAPE logs for pathfinder diagnostics | Diagnostics |
+| **Emergency LLM Help** | When stuck → sends problem report to LLM for escape instructions | Error Recovery |
+| **Tool-Aware Mining** | getBestTool() selects pickaxe/axe/shovel by block type; auto-equips | Skill Execution |
+| **Plugin Chunk Tickets** | Keeps chunks around NPC loaded via Paper API (no players needed) | Infrastructure |
+| **Block-Breaking Animation** | ProtocolLib stages 0-9 over ~1s with NMS packet construction | Visual Feedback |
+| **STUCK-ESCAPE Teleport** | Teleports agent out of stuck position when all else fails | Error Recovery |
+| **Craft→Idle Deadlock Detection** | Detects 3× craft→idle loops, clears craft cooldowns | Reflex Tuning |
 
 ## Excluded Scope (Future)
 
