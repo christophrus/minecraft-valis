@@ -125,14 +125,11 @@ public class WorldObserver {
      * Analyze which items the agent can craft with its current inventory.
      * Returns JSON with "can_craft" (have all materials) and "almost" (missing 1-2 items).
      */
-    private int craftDebugCounter = 0;
-
     private JsonObject observeCraftable() {
         JsonObject result = new JsonObject();
         JsonArray canCraft = new JsonArray();
         JsonArray almost = new JsonArray();
         Map<String, Integer> inv = agent.getInventory();
-        craftDebugCounter++;
 
         for (Material target : RELEVANT_ITEMS) {
             var recipes = Bukkit.getRecipesFor(new ItemStack(target));
@@ -188,10 +185,6 @@ public class WorldObserver {
         }
         result.add("can_craft", canCraft);
         result.add("almost", almost);
-        if (canCraft.size() > 0 && craftDebugCounter % 100 == 1) {
-            plugin.getLogger().info("Craftable: can=" + canCraft.size() + " almost=" + almost.size()
-                    + " inv=" + inv.size());
-        }
         return result;
     }
 

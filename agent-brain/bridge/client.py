@@ -75,11 +75,6 @@ class BridgeClient:
                 inner = data.get("data", data)
                 inner["agent_name"] = data.get("agent_name", inner.get("agent_name", ""))
                 perception = PerceptionData.from_json(inner)
-                craft_key = tuple(c.get('item') for c in perception.craftable)
-                if craft_key != getattr(self, '_last_craft_key', ()):
-                    self._last_craft_key = craft_key
-                    if perception.craftable:
-                        logger.info(f"Craftable changed: can_craft={len(perception.craftable)} items={list(craft_key[:5])}")
                 await self.manager.handle_perception(perception)
 
             case "action_result":
