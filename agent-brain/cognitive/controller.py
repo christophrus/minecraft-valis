@@ -173,13 +173,15 @@ Output ONLY JSON:
                     raise ValueError("No JSON object found in response")
                 data = json.loads(json_str)
 
+                _intent = data.get("intent", "Explore the area")
+                _reason = data.get("reason", "No specific reason")
                 decision = ControllerDecision(
-                    intent=data.get("intent", "Explore the area"),
-                    reason=data.get("reason", "No specific reason"),
+                    intent=str(_intent) if not isinstance(_intent, str) else _intent,
+                    reason=str(_reason) if not isinstance(_reason, str) else _reason,
                     priority=float(data.get("priority", 5)) / 10.0,
                     social_context=social_text,
-                    action_hint=data.get("action_hint", "explore"),
-                    chat_hint=data.get("chat_hint", ""),
+                    action_hint=str(data.get("action_hint", "explore")),
+                    chat_hint=str(data.get("chat_hint", "")),
                 )
                 break  # Success
             except Exception as e:

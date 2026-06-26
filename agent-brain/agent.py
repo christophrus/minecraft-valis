@@ -120,6 +120,14 @@ class ValisAgent:
         self._craft_idle_streak: int = 0  # Count consecutive craft→idle cycles to break deadlocks
         self._build_queue: list[AgentAction] = []  # Queued place_block actions for multi-block building
 
+        # Performance: controller cache + APM tracking
+        self._cached_decision: object | None = None
+        self._cached_decision_tick: int = 0
+        self._last_perception_hash: int | None = None
+        self._action_result_ready: bool = False
+        self._apm_actions: int = 0
+        self._apm_start: float | None = None
+
         logger.info(f"Agent created: {self.name} ({self.personality}) [{self.agent_id}]")
 
     # --- Public API ---
@@ -167,6 +175,113 @@ class ValisAgent:
             logger.warning(f"Importance scoring LLM failed: {e}")
         return 0.5
 
+    def _try_fast_craft(self, perception: PerceptionData) -> AgentAction | None:
+        """Pre-emptive tech-tree progression — craft planks/table/tools and place the
+        crafting table WITHOUT an LLM call. Runs every tick regardless of controller hint.
+        Returns a craft/place_block action, or None if there is nothing to do.
+
+        This is what keeps the agent progressing: it had logs+sticks+table in inventory
+        for 200 ticks but never crafted tools because the LLM was asked instead of this.
+        """
+        import time
+        pos = perception.position
+        px, py, pz = int(pos.get("x", 0)), int(pos.get("y", 0)), int(pos.get("z", 0))
+        blocks = perception.nearby_blocks
+        inv = perception.inventory
+
+        if not hasattr(self, '_recently_crafted'):
+            self._recently_crafted: dict[str, float] = {}
+        now = time.time()
+        self._recently_crafted = {k: v for k, v in self._recently_crafted.items() if now - v < 5}
+
+        all_logs = ("oak_log","birch_log","spruce_log","jungle_log","acacia_log",
+                    "dark_oak_log","cherry_log","mangrove_log")
+        all_planks = ("oak_planks","birch_planks","spruce_planks","jungle_planks",
+                      "acacia_planks","dark_oak_planks","cherry_planks","mangrove_planks")
+        total_logs = sum(inv.get(lt, 0) for lt in all_logs)
+        total_planks = sum(inv.get(pt, 0) for pt in all_planks)
+        total_sticks = inv.get("stick", 0)
+        has_pickaxe = any("pickaxe" in k.lower() for k in inv)
+
+        def _find_best(key_list):
+            best, best_count = None, 0
+            for k in key_list:
+                c = inv.get(k, 0)
+                if c > best_count:
+                    best, best_count = k, c
+            return best
+
+        # Tools (pickaxe/axe) need a crafting table nearby — place it FIRST if we have one
+        # but none is nearby, so the subsequent craft doesn't fail with "need crafting_table".
+        has_crafting_table_inv = inv.get("crafting_table", 0) >= 1
+        has_crafting_table_nearby = (
+            self._crafting_table_placed or
+            any(b.get("type", "").upper() == "CRAFTING_TABLE" and abs(b.get("x",0)-px) <= 3 and abs(b.get("z",0)-pz) <= 3
+                for b in blocks)
+        )
+        _REPLACEABLE = frozenset({"AIR","CAVE_AIR","VOID_AIR","SHORT_GRASS","TALL_GRASS",
+                                    "FERN","LARGE_FERN","DEAD_BUSH","SNOW","VINE","LEAF_LITTER"})
+        # Will we want to craft a table-requiring tool this tick? (pickaxe/axe/sword)
+        wants_tool = (total_sticks >= 2 and total_planks >= 3
+                      and (not has_pickaxe or not any("axe" in k.lower() for k in inv)))
+        if has_crafting_table_inv and not has_crafting_table_nearby and wants_tool:
+            tx, ty, tz = px, py + 1, pz
+            blocked = any(b.get("x",0)==tx and b.get("y",0)==ty and b.get("z",0)==tz
+                          and b.get("type","").upper() not in _REPLACEABLE for b in blocks)
+            if not blocked:
+                logger.debug(f"FAST-CRAFT: placing crafting_table at ({tx},{ty},{tz}) before crafting tool")
+                self._crafting_table_placed = True
+                self._crafting_table_pos = (tx, ty, tz)
+                return AgentAction(agent_name="", action="place_block",
+                                   params={"block_type": "crafting_table", "x": tx, "y": ty, "z": tz})
+
+        craft_action = None
+        if total_logs >= 1 and total_planks < 4:
+            best_log = _find_best(all_logs)
+            plank_type = best_log.replace("_log", "_planks") if best_log else "oak_planks"
+            if plank_type not in self._recently_crafted:
+                craft_action = AgentAction(agent_name="", action="craft", params={"item": plank_type})
+                logger.debug(f"FAST-CRAFT: pre-emptive CRAFT planks ({best_log}={inv.get(best_log,0)})")
+        # Crafting table: when we have 4+ planks, no table in inventory
+        elif total_planks >= 4 and inv.get("crafting_table", 0) < 1:
+            if self._crafting_table_placed and self._crafting_table_pos:
+                ctx, cty, ctz = self._crafting_table_pos
+                table_dist = abs(px - ctx) + abs(py - cty) + abs(pz - ctz)
+                if table_dist > 16:
+                    self._crafting_table_placed = False
+                    self._crafting_table_pos = None
+            if "crafting_table" not in self._recently_crafted:
+                craft_action = AgentAction(agent_name="", action="craft", params={"item": "crafting_table"})
+                logger.debug(f"FAST-CRAFT: pre-emptive CRAFT crafting_table (planks={total_planks})")
+        # Pickaxe: 3 planks + 2 sticks (needs table — placed above)
+        elif total_sticks >= 2 and total_planks >= 3 and not has_pickaxe and has_crafting_table_nearby:
+            pickaxe_type = "stone_pickaxe" if inv.get("cobblestone", 0) >= 3 else "wooden_pickaxe"
+            if pickaxe_type not in self._recently_crafted:
+                craft_action = AgentAction(agent_name="", action="craft", params={"item": pickaxe_type})
+                logger.debug(f"FAST-CRAFT: pre-emptive CRAFT {pickaxe_type} (sticks={total_sticks}, planks={total_planks})")
+        # Axe: 3 planks + 2 sticks (needs table)
+        elif total_sticks >= 2 and total_planks >= 3 and not any("axe" in k.lower() for k in inv) and has_crafting_table_nearby:
+            if "wooden_axe" not in self._recently_crafted:
+                craft_action = AgentAction(agent_name="", action="craft", params={"item": "wooden_axe"})
+                logger.debug(f"FAST-CRAFT: pre-emptive CRAFT wooden_axe (sticks={total_sticks}, planks={total_planks})")
+        # Sticks: from surplus planks (>= 5 so >=3 remain for a tool)
+        elif total_sticks < 4 and total_planks >= 5:
+            if "stick" not in self._recently_crafted:
+                craft_action = AgentAction(agent_name="", action="craft", params={"item": "stick"})
+                logger.debug(f"FAST-CRAFT: pre-emptive CRAFT sticks (planks={total_planks}, sticks={total_sticks})")
+
+        if craft_action:
+            item = craft_action.params.get("item", "")
+            fail_key = f"craft:{item}"
+            if fail_key in self._failed_actions and self._failed_actions[fail_key] >= 3:
+                logger.debug(f"FAST-CRAFT: skipping {item} — blacklisted ({self._failed_actions[fail_key]} failures)")
+                return None
+            if item:
+                self._recently_crafted[item] = time.time()
+                self._craft_idle_streak = 0
+                return craft_action
+        return None
+
     def _decision_to_action(self, decision, perception: PerceptionData) -> AgentAction | None:
         """Convert controller decision to an action.
         Priority: 1) LLM intent coordinates, 2) Perception heuristics, 3) None (LLM fallback)."""
@@ -210,102 +325,10 @@ class ValisAgent:
         self._recently_crafted = {k: v for k, v in self._recently_crafted.items() if now - v < 5}
         def pos_key(b): return f"{b.get('x',0)},{b.get('y',0)},{b.get('z',0)}"
 
-        # --- PRE-EMPTIVE CRAFTING CHECK ---
-        # If agent has materials that need processing, craft NOW regardless of controller hint.
-        # This prevents the agent from running around with logs/planks without ever crafting.
-        inv = perception.inventory
-        all_logs = ("oak_log","birch_log","spruce_log","jungle_log","acacia_log",
-                    "dark_oak_log","cherry_log","mangrove_log")
-        all_planks = ("oak_planks","birch_planks","spruce_planks","jungle_planks",
-                      "acacia_planks","dark_oak_planks","cherry_planks","mangrove_planks")
-        total_logs = sum(inv.get(lt, 0) for lt in all_logs)
-        total_planks = sum(inv.get(pt, 0) for pt in all_planks)
-        total_sticks = inv.get("stick", 0)
-        has_pickaxe = any("pickaxe" in k.lower() for k in inv)
-        
-        # Find the most abundant log/plank type for crafting
-        def _find_best(key_list):
-            best, best_count = None, 0
-            for k in key_list:
-                c = inv.get(k, 0)
-                if c > best_count:
-                    best, best_count = k, c
-            return best
-        
-        craft_action = None
-        if total_logs >= 1 and total_planks < 4:
-            best_log = _find_best(all_logs)
-            plank_type = best_log.replace("_log", "_planks") if best_log else "oak_planks"
-            if plank_type not in self._recently_crafted:
-                craft_action = AgentAction(agent_name="", action="craft", params={"item": plank_type})
-                logger.debug(f"FAST-PATH: pre-emptive CRAFT planks ({best_log}={inv.get(best_log,0)})")
-        # Crafting table: when we have 4+ planks, no table in inventory
-        # Reset _crafting_table_placed if agent wandered far from where it was placed
-        elif total_planks >= 4 and inv.get("crafting_table", 0) < 1:
-            if self._crafting_table_placed and self._crafting_table_pos:
-                ctx, cty, ctz = self._crafting_table_pos
-                table_dist = abs(px - ctx) + abs(py - cty) + abs(pz - ctz)
-                if table_dist > 16:
-                    logger.debug(f"FAST-PATH: crafting_table too far ({table_dist}m), allowing re-craft")
-                    self._crafting_table_placed = False
-                    self._crafting_table_pos = None
-            if not self._crafting_table_placed:
-                if "crafting_table" not in self._recently_crafted:
-                    craft_action = AgentAction(agent_name="", action="craft", params={"item": "crafting_table"})
-                    logger.debug(f"FAST-PATH: pre-emptive CRAFT crafting_table (planks={total_planks})")
-        # Pickaxe: 3 planks + 2 sticks (BEFORE sticks check — don't waste planks on sticks first)
-        elif total_sticks >= 2 and total_planks >= 3 and not has_pickaxe:
-            pickaxe_type = "wooden_pickaxe"
-            if inv.get("cobblestone", 0) >= 3:
-                pickaxe_type = "stone_pickaxe"
-            if pickaxe_type not in self._recently_crafted:
-                craft_action = AgentAction(agent_name="", action="craft", params={"item": pickaxe_type})
-                logger.debug(f"FAST-PATH: pre-emptive CRAFT {pickaxe_type} (sticks={total_sticks}, planks={total_planks})")
-        # Axe: 3 planks + 2 sticks (after pickaxe, if we still have materials)
-        elif total_sticks >= 2 and total_planks >= 3 and not any("axe" in k.lower() for k in inv):
-            axe_type = "wooden_axe"
-            if axe_type not in self._recently_crafted:
-                craft_action = AgentAction(agent_name="", action="craft", params={"item": axe_type})
-                logger.debug(f"FAST-PATH: pre-emptive CRAFT {axe_type} (sticks={total_sticks}, planks={total_planks})")
-        # Sticks: only craft from SURPLUS beyond what pickaxe needs (3 planks) + stick cost (2 planks)
-        # So threshold is: planks >= 3 (pickaxe) + 2 (stick cost) = 5 planks
-        elif total_sticks < 4 and total_planks >= 5:
-            # We have 5+ planks, 2→4 sticks, leaving >=3 for pickaxe
-            if "stick" not in self._recently_crafted:
-                craft_action = AgentAction(agent_name="", action="craft", params={"item": "stick"})
-                logger.debug(f"FAST-PATH: pre-emptive CRAFT sticks (planks={total_planks}, sticks={total_sticks})")
-        
-        if craft_action:
-            item = craft_action.params.get("item", "")
-            fail_key = f"craft:{item}"
-            if fail_key in self._failed_actions and self._failed_actions[fail_key] >= 3:
-                logger.debug(f"FAST-PATH: skipping pre-emptive craft {item} — blacklisted ({self._failed_actions[fail_key]} failures)")
-                craft_action = None
-            elif item:
-                self._recently_crafted[item] = time.time()
-                self._craft_idle_streak = 0
-                return craft_action
-
-        # --- CRAFTING TABLE: place if we have one but none nearby ---
-        has_crafting_table_inv = inv.get("crafting_table", 0) >= 1
-        has_crafting_table_nearby = (
-            self._crafting_table_placed or
-            any(b.get("type", "").upper() == "CRAFTING_TABLE" and abs(b.get("x",0)-px) <= 3 and abs(b.get("z",0)-pz) <= 3
-                for b in blocks)
-        )
-        _REPLACEABLE = frozenset({"AIR","CAVE_AIR","VOID_AIR","SHORT_GRASS","TALL_GRASS",
-                                    "FERN","LARGE_FERN","DEAD_BUSH","SNOW","VINE","LEAF_LITTER"})
-        if has_crafting_table_inv and not has_crafting_table_nearby:
-            # Place crafting table at agent's feet+1
-            tx, ty, tz = px, py + 1, pz
-            blocked = any(b.get("x",0)==tx and b.get("y",0)==ty and b.get("z",0)==tz
-                          and b.get("type","").upper() not in _REPLACEABLE for b in blocks)
-            if not blocked:
-                logger.debug(f"FAST-PATH: placing crafting_table at ({tx},{ty},{tz})")
-                self._crafting_table_placed = True
-                self._crafting_table_pos = (tx, ty, tz)
-                return AgentAction(agent_name="", action="place_block",
-                                   params={"block_type": "crafting_table", "x": tx, "y": ty, "z": tz})
+        # --- PRE-EMPTIVE CRAFTING + TABLE PLACEMENT (extracted, runs every tick) ---
+        fast_craft = self._try_fast_craft(perception)
+        if fast_craft:
+            return fast_craft
 
         # --- NON-PLACEABLE ITEMS: never try to place these ---
         NON_PLACEABLE = frozenset({
@@ -833,7 +856,8 @@ class ValisAgent:
                 logger.warning(f"Agent {self.name}: action '{fail_key}' failed {self._failed_actions[fail_key]}× — blacklisted for session")
 
         logger.info(f"Agent {self.name} action result: {result.action} -> {'OK' if result.success else 'FAIL'}: {result.details}")
-        self._perception_event.set()  # Wake cognitive loop to process result
+        self._action_result_ready = True
+        self._perception_event.set()  # Wake cognitive loop for immediate next action
 
     async def _emergency_help(self, problem_type: str, context: dict) -> AgentAction | None:
         """
@@ -948,6 +972,58 @@ Respond ONLY with valid JSON:
         logger.info(f"BUILD: expanded '{build_type}' at ({cx},{cy},{cz}) into {len(queue)} place_block actions")
         return queue
 
+    def _try_start_build(self, decision, perception: PerceptionData) -> AgentAction | None:
+        """When the controller wants to build but the LLM keeps emitting move_to/look_at
+        instead of build(), start the build directly from a fast-path heuristic.
+
+        Requires enough placeable building material in inventory. Returns the first
+        place_block of the build queue, or None if we can't build yet.
+        """
+        import time
+        inv = perception.inventory
+        # Building materials we can place for a shelter, in preference order
+        build_mats = ("dirt", "cobblestone", "oak_planks", "birch_planks", "spruce_planks",
+                      "jungle_planks", "acacia_planks", "dark_oak_planks", "oak_log",
+                      "birch_log", "spruce_log", "jungle_log")
+        material, mat_count = None, 0
+        for m in build_mats:
+            c = inv.get(m, 0)
+            if c > mat_count:
+                material, mat_count = m, c
+        # A 3x3 shelter needs ~20 blocks; start if we have a reasonable stock (>=8),
+        # the build queue itself stops gracefully when material runs out.
+        if not material or mat_count < 8:
+            logger.debug(f"FAST-BUILD: not enough material (best={material}:{mat_count}), deferring")
+            return None
+        if getattr(self, '_recently_built', 0) and time.time() - self._recently_built < 120:
+            return None
+
+        pos = perception.position
+        cx, cy, cz = int(pos.get("x", 0)), int(pos.get("y", 0)), int(pos.get("z", 0))
+        build_params = AgentAction(agent_name="", action="build",
+                                   params={"type": "shelter", "material": material,
+                                           "x": cx, "y": cy, "z": cz})
+        self._build_queue = self._expand_build(build_params, perception)
+        if not self._build_queue:
+            return None
+        self._recently_built = time.time()
+        logger.info(f"FAST-BUILD: starting shelter with {material} ({mat_count} avail) at ({cx},{cy},{cz})")
+        return self._build_queue.pop(0)
+
+    def _perception_changed_significantly(self, perception: PerceptionData) -> bool:
+        """Check if perception changed enough to warrant a fresh controller LLM call."""
+        inv_key = tuple(sorted(perception.inventory.items()))
+        entity_count = len(perception.nearby_entities)
+        pos_bucket = (
+            round(perception.position.get('x', 0) / 5) * 5,
+            round(perception.position.get('y', 0) / 5) * 5,
+            round(perception.position.get('z', 0) / 5) * 5,
+        )
+        current_hash = hash((inv_key, entity_count, pos_bucket))
+        changed = current_hash != self._last_perception_hash
+        self._last_perception_hash = current_hash
+        return changed
+
     async def cognitive_tick(self):
         """
         Run one full cognitive cycle.
@@ -957,13 +1033,31 @@ Respond ONLY with valid JSON:
             return
         logger.debug(f"Tick entry {self.name} evt={self._perception_event.is_set()}")
 
-        # Wait for perception data
+        # APM tracking
+        import time as _t
+        if self._apm_start is None:
+            self._apm_start = _t.time()
+
+        # Wait for perception data or action_result signal
         try:
             await asyncio.wait_for(self._perception_event.wait(), timeout=10.0)
         except asyncio.TimeoutError:
             logger.debug(f"Agent {self.name}: waiting for perception (timeout)")
             return
         self._perception_event.clear()
+        is_fast_tick = self._action_result_ready
+        self._action_result_ready = False
+
+        # Cap consecutive fast-ticks so the LLM planner keeps setting direction.
+        # After 6 heuristic actions in a row, force a full LLM tick.
+        if is_fast_tick:
+            self._consecutive_fast_ticks = getattr(self, '_consecutive_fast_ticks', 0) + 1
+            if self._consecutive_fast_ticks >= 6:
+                is_fast_tick = False
+                self._consecutive_fast_ticks = 0
+                logger.debug("FAST-TICK-CAP: forcing full LLM tick after 6 fast-ticks")
+        else:
+            self._consecutive_fast_ticks = 0
 
         self.tick_count += 1
         perception = self._pending_perception
@@ -1019,17 +1113,35 @@ Respond ONLY with valid JSON:
                     logger.info(f"EMERGENCY-HELP (stuck): overriding with LLM suggestion: {emergency_action.action} {emergency_action.params}")
                     return emergency_action
 
-            # Step 1: Run Cognitive Controller (PIANO bottleneck)
-            decision = await self.controller.decide(self)
-            if not self._running:
-                return
+            # Step 1: Run Cognitive Controller (PIANO bottleneck) — with caching
+            ticks_since_ctrl = self.tick_count - self._cached_decision_tick
+            perception_changed = self._perception_changed_significantly(perception)
+            use_cache = (
+                self._cached_decision is not None
+                and ticks_since_ctrl < 5
+                and not perception_changed
+            )
+            if is_fast_tick and self._cached_decision and ticks_since_ctrl < 15:
+                decision = self._cached_decision
+                logger.debug(f"CTRL-CACHE: fast-tick reuse (age={ticks_since_ctrl}t)")
+            elif use_cache:
+                decision = self._cached_decision
+                logger.debug(f"CTRL-CACHE: reusing (age={ticks_since_ctrl}t, no significant change)")
+            else:
+                decision = await self.controller.decide(self)
+                self._cached_decision = decision
+                self._cached_decision_tick = self.tick_count
+                if not self._running:
+                    return
 
             # --- DEBUG: Controller output ---
             import re as _re
-            logger.debug(f"CTRL: hint={decision.action_hint} priority={decision.priority:.2f}")
-            logger.debug(f"CTRL: intent='{decision.intent[:200]}'")
-            logger.debug(f"CTRL: reason='{decision.reason[:200]}'")
-            _ic = _re.findall(r'\((-?\d+),\s*(-?\d+),\s*(-?\d+)\)', decision.intent)
+            logger.debug(f"CTRL: hint={decision.action_hint} priority={decision.priority:.2f} cached={use_cache or is_fast_tick}")
+            _intent_str = str(decision.intent) if not isinstance(decision.intent, str) else decision.intent
+            _reason_str = str(decision.reason) if not isinstance(decision.reason, str) else decision.reason
+            logger.debug(f"CTRL: intent='{_intent_str[:200]}'")
+            logger.debug(f"CTRL: reason='{_reason_str[:200]}'")
+            _ic = _re.findall(r'\((-?\d+),\s*(-?\d+),\s*(-?\d+)\)', _intent_str)
             logger.debug(f"CTRL: intent_coords={_ic if _ic else 'NONE'}")
             nb = perception.nearby_biomes
             logger.debug(f"CTRL: nearby_biomes={dict(nb) if nb else 'NONE'}")
@@ -1041,8 +1153,8 @@ Respond ONLY with valid JSON:
                  "ACACIA_LEAVES","DARK_OAK_LEAVES"))
             logger.debug(f"CTRL: wood_in_perception={wood_count} total_blocks={len(perception.nearby_blocks)}")
 
-            # Step 2: Generate goals periodically
-            if self.tick_count % 30 == 0:
+            # Step 2: Generate goals periodically (skip on fast-ticks to avoid LLM latency)
+            if not is_fast_tick and self.tick_count % 100 == 0:
                 await self.goal_generator.generate_goals(
                     self,
                     self.perception_processor.build_context_text(),
@@ -1051,8 +1163,8 @@ Respond ONLY with valid JSON:
                 if not self._running:
                     return
 
-            # Step 3: Plan action (first tick or when task changes)
-            if self.tick_count == 1 or self.tick_count % 10 == 0:
+            # Step 3: Plan action (first tick or periodically, skip on fast-ticks)
+            if not is_fast_tick and (self.tick_count == 1 or self.tick_count % 50 == 0):
                 await self.planner.plan_daily(self)
                 if not self._running:
                     return
@@ -1068,7 +1180,19 @@ Respond ONLY with valid JSON:
                 parsed = next_block
                 self._build_queue.pop(0)
 
-            # --- Fast-path: crafting, danger, stuck ---
+            # --- FIX B: pre-emptive crafting/table — ALWAYS, regardless of hint ---
+            # Without this the agent ran 200 ticks with logs+sticks+table but never
+            # crafted tools because the slow LLM was asked instead.
+            if parsed is None:
+                parsed = self._try_fast_craft(perception)
+                if parsed:
+                    logger.debug(f"FAST-CRAFT-PATH: {parsed.action} {parsed.params}")
+
+            # --- FIX C: build hint → start the build directly (LLM never emits build()) ---
+            if parsed is None and decision.action_hint == "build" and not self._build_queue:
+                parsed = self._try_start_build(decision, perception)
+
+            # --- Fast-path: craft hint, danger, stuck, AND fast-ticks (FIX A) ---
             if parsed is None:
                 _stuck_list = getattr(self, '_stuck_positions', [])
                 _actually_stuck = (len(_stuck_list) >= 5 and len(set(_stuck_list[-5:])) == 1)
@@ -1076,11 +1200,15 @@ Respond ONLY with valid JSON:
                     decision.action_hint in ("craft",)
                     or (decision.priority >= 0.9 and decision.action_hint in ("attack", "flee"))
                     or _actually_stuck
+                    # FIX A: on action-result-driven ticks, continue the sequence with the
+                    # heuristic instead of waiting 5-20s for the planner LLM. The LLM still
+                    # runs on normal perception ticks, preserving LLM-driven direction.
+                    or is_fast_tick
                 )
                 if use_fast_path:
                     parsed = self._decision_to_action(decision, perception)
                     if parsed:
-                        logger.debug(f"FAST-PATH: priority={decision.priority:.2f} hint={decision.action_hint} → {parsed.action}")
+                        logger.debug(f"FAST-PATH: priority={decision.priority:.2f} hint={decision.action_hint} fast_tick={is_fast_tick} → {parsed.action}")
 
             if parsed is None:
                 # Primary path: LLM action decision informed by plan + retrieval
@@ -1171,16 +1299,29 @@ Respond ONLY with valid JSON:
             importance = decision.priority * 5  # Scale to roughly match threshold
             self.reflection.accumulate_importance(importance)
 
-            # Step 7: Reflect if threshold exceeded
-            if self.reflection.should_reflect():
+            # Step 7: Reflect if threshold exceeded (skip on fast-ticks)
+            if not is_fast_tick and self.reflection.should_reflect():
                 await self.reflection.reflect(self)
 
-            # Step 8: Store event in memory (importance scored via LLM)
-            action_desc = f"{parsed.action} {parsed.params}" if parsed else "idle"
-            context = self.perception_processor.build_context_text()
-            await self.memory.add_event(
-                content=f"[Tick {self.tick_count}] {action_desc}. Context: {context[:150]}",
-            )
+            # Step 8: Store event in memory (skip on fast-ticks for build queue blocks)
+            if not is_fast_tick or (parsed and parsed.action != "place_block"):
+                action_desc = f"{parsed.action} {parsed.params}" if parsed else "idle"
+                context = self.perception_processor.build_context_text()
+                await self.memory.add_event(
+                    content=f"[Tick {self.tick_count}] {action_desc}. Context: {context[:150]}",
+                )
+
+            # APM tracking
+            self._apm_actions += 1
+            elapsed_apm = _t.time() - self._apm_start
+            if elapsed_apm >= 60:
+                apm = self._apm_actions / (elapsed_apm / 60)
+                logger.info(f"APM: {apm:.1f} actions/min over {elapsed_apm:.0f}s ({self._apm_actions} actions)")
+                self._apm_start = _t.time()
+                self._apm_actions = 0
+            elif self.tick_count % 10 == 0 and elapsed_apm > 5:
+                apm = self._apm_actions / (elapsed_apm / 60)
+                logger.debug(f"APM-INTERIM: {apm:.1f} actions/min ({self._apm_actions} actions in {elapsed_apm:.0f}s)")
 
         except Exception as e:
             logger.error(f"Agent {self.name} cognitive tick error: {e}", exc_info=True)
