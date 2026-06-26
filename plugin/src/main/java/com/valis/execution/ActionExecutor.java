@@ -372,7 +372,11 @@ public class ActionExecutor {
      */
 
     private void craft(JsonObject params) {
-        String itemName = params.has("item") ? params.get("item").getAsString().toLowerCase() : "";
+        String itemName = params.has("item") ? params.get("item").getAsString().toLowerCase().trim() : "";
+        // Strip quantity prefix like "4x stick" → "stick"
+        if (itemName.matches("\\d+x\\s+.*")) {
+            itemName = itemName.replaceFirst("\\d+x\\s+", "");
+        }
         Material resultMat = Material.matchMaterial(itemName.toUpperCase());
         if (resultMat == null) {
             plugin.getWsBridge().sendActionResult(agent.getAgentName(), "craft",
@@ -384,6 +388,41 @@ public class ActionExecutor {
         boolean crafted = false;
         for (var recipe : recipes) {
             if (recipe instanceof org.bukkit.inventory.ShapedRecipe shaped) {
+                // Check if recipe needs a crafting table (more than 4 ingredient slots = 3x3 grid)
+                int filledSlots = 0;
+                for (var choice : shaped.getChoiceMap().values()) {
+                    if (choice != null) filledSlots++;
+                }
+                if (filledSlots > 4) {
+                    // 3x3 recipe — requires a nearby crafting table
+                    Location agentLoc = agent.getNpc() != null && agent.getNpc().isSpawned()
+                            ? agent.getNpc().getEntity().getLocation() : null;
+                    if (agentLoc != null) {
+                        boolean tableNearby = false;
+                        int radius = 4;
+                        for (int dx = -radius; dx <= radius; dx++) {
+                            for (int dy = -2; dy <= 2; dy++) {
+                                for (int dz = -radius; dz <= radius; dz++) {
+                                    Block b = agentLoc.getWorld().getBlockAt(
+                                            agentLoc.getBlockX() + dx,
+                                            agentLoc.getBlockY() + dy,
+                                            agentLoc.getBlockZ() + dz);
+                                    if (b.getType() == Material.CRAFTING_TABLE) {
+                                        tableNearby = true;
+                                        break;
+                                    }
+                                }
+                                if (tableNearby) break;
+                            }
+                            if (tableNearby) break;
+                        }
+                        if (!tableNearby) {
+                            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "craft",
+                                    false, "need nearby crafting_table for " + itemName);
+                            return;
+                        }
+                    }
+                }
                 // Use getChoiceMap() to support material variants (e.g. any plank type for crafting_table)
                 var choices = shaped.getChoiceMap();
                 // For each slot, find which material the agent actually has

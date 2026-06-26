@@ -563,26 +563,10 @@ class ValisAgent:
             return AgentAction(agent_name="", action="collect_items")
 
         if hint == "craft":
-            # Pre-emptive craft check already ran above — if nothing was craftable, count idle streak.
-            # After 3 consecutive craft→idle cycles, clear cooldowns to break deadlocks.
-            self._craft_idle_streak += 1
-            if self._craft_idle_streak >= 3:
-                logger.warning(f"FAST-PATH: craft→idle deadlock detected ({self._craft_idle_streak}× idle). Clearing craft cooldowns.")
-                self._recently_crafted.clear()
-                self._craft_idle_streak = 0
-                # Direct craft attempt: if we have logs, craft planks regardless of thresholds
-                inv = perception.inventory
-                all_logs = ["oak_log","birch_log","spruce_log","jungle_log","acacia_log","dark_oak_log","cherry_log","mangrove_log"]
-                for log_type in all_logs:
-                    if inv.get(log_type, 0) >= 1:
-                        plank_type = log_type.replace("_log", "_planks")
-                        fail_key = f"craft:{plank_type}"
-                        if fail_key not in self._failed_actions or self._failed_actions[fail_key] < 3:
-                            logger.debug(f"FAST-PATH: deadlock-break crafting {plank_type} from {log_type}")
-                            self._recently_crafted[plank_type] = time.time()
-                            return AgentAction(agent_name="", action="craft", params={"item": plank_type})
-            logger.debug(f"FAST-PATH: craft hint but nothing to craft, idling (streak={self._craft_idle_streak})")
-            return AgentAction(agent_name="", action="idle")
+            # Pre-emptive craft already ran above — if nothing was craftable, fall through to LLM-PATH.
+            # Don't idle — let the LLM decide a productive alternative action.
+            logger.debug(f"FAST-PATH: craft hint but nothing to craft, deferring to LLM-PATH")
+            return None  # signals caller to use LLM-PATH instead of idling
 
         if hint in ("move", "explore", "mine", "place"):
             import math
