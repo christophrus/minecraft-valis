@@ -118,6 +118,7 @@ class ValisAgent:
         self._recently_crafted: dict[str, float] = {}  # Track recent crafts to avoid duplicate due to inv lag
         self._failed_actions: dict[str, int] = {}  # Track repeated failures to avoid retrying (e.g. "place:stick")
         self._craft_idle_streak: int = 0  # Count consecutive craft→idle cycles to break deadlocks
+        self._build_queue: list[AgentAction] = []  # Queued place_block actions for multi-block building
 
         logger.info(f"Agent created: {self.name} ({self.personality}) [{self.agent_id}]")
 
@@ -809,6 +810,12 @@ class ValisAgent:
                 mkey = f"{coord_match.group(1)},{coord_match.group(2)},{coord_match.group(3)}"
                 self._recently_mined[mkey] = __import__('time').time()
 
+        # Clear build queue on place_block failure — don't keep hammering invalid positions
+        if not result.success and result.action == "place_block" and self._build_queue:
+            dropped = len(self._build_queue)
+            self._build_queue.clear()
+            logger.warning(f"BUILD-QUEUE: cleared {dropped} queued blocks after place_block failure: {result.details}")
+
         # Track repeated failures to avoid retrying the same broken action
         if not result.success:
             fail_key = f"{result.action}:{result.details.split(' ')[-1] if result.details else 'unknown'}"
@@ -897,6 +904,49 @@ Respond ONLY with valid JSON:
         except Exception as e:
             logger.warning(f"EMERGENCY-HELP: LLM call failed: {e}")
             return None
+
+    def _expand_build(self, parsed: AgentAction, perception: PerceptionData | None) -> list[AgentAction]:
+        """
+        Expand a build() action into a queue of place_block actions.
+
+        The LLM outputs: build(type=shelter, material=dirt, x=85, y=67, z=-80)
+        This generates a 3x3x3 hollow box of place_block calls around (x, y, z).
+        """
+        params = parsed.params
+        material = str(params.get("material", "dirt")).lower()
+        cx = int(params.get("x", 0))
+        cy = int(params.get("y", 0))
+        cz = int(params.get("z", 0))
+        build_type = str(params.get("type", "shelter")).lower()
+
+        queue: list[AgentAction] = []
+
+        if build_type in ("shelter", "hut", "house", "wall"):
+            # 3x3 shelter: walls at floor level + 1 block up, roof on top, hollow inside
+            # Floor plan (relative to center cx, cz):
+            #  W W W
+            #  W . W    (. = interior, W = wall)
+            #  W D W    (D = doorway, left open)
+            for dy in range(3):  # 3 layers: floor-walls, upper-walls, roof
+                for dx in [-1, 0, 1]:
+                    for dz in [-1, 0, 1]:
+                        bx, by, bz = cx + dx, cy + dy, cz + dz
+                        if dy < 2:
+                            # Wall layers: place only perimeter blocks, skip interior
+                            if dx == 0 and dz == 0:
+                                continue  # hollow interior
+                            # Leave a doorway at (cx, cy, cz+1) and (cx, cy+1, cz+1)
+                            if dx == 0 and dz == 1 and dy < 2:
+                                continue
+                        # Roof layer (dy==2): place all 9 blocks
+                        queue.append(AgentAction(
+                            agent_name="",
+                            action="place_block",
+                            params={"block_type": material, "x": bx, "y": by, "z": bz},
+                        ))
+
+        logger.info(f"BUILD: expanded '{build_type}' at ({cx},{cy},{cz}) into {len(queue)} place_block actions")
+        return queue
 
     async def cognitive_tick(self):
         """
@@ -1007,22 +1057,30 @@ Respond ONLY with valid JSON:
                 if not self._running:
                     return
 
-            # Step 4: Decide action — LLM-first with fast-path only for emergencies/crafting
-            # The Generative Agents paper shows planning is critical for believability.
-            # Fast-path only for: high priority (danger), pre-emptive crafting, stuck escape.
+            # Step 4: Decide action — build queue first, then LLM/fast-path
             action_str = ""
-            _stuck_list = getattr(self, '_stuck_positions', [])
-            _actually_stuck = (len(_stuck_list) >= 5 and len(set(_stuck_list[-5:])) == 1)
-            use_fast_path = (
-                decision.action_hint in ("craft",)  # crafting is deterministic
-                or (decision.priority >= 0.9 and decision.action_hint in ("attack", "flee"))
-                or _actually_stuck  # only when genuinely stuck at same position for 5+ ticks
-            )
             parsed = None
-            if use_fast_path:
-                parsed = self._decision_to_action(decision, perception)
-                if parsed:
-                    logger.debug(f"FAST-PATH: priority={decision.priority:.2f} hint={decision.action_hint} → {parsed.action}")
+
+            # --- BUILD QUEUE: execute queued place_block actions one per tick ---
+            if self._build_queue:
+                next_block = self._build_queue[0]
+                logger.debug(f"BUILD-QUEUE: placing {next_block.params} ({len(self._build_queue)} remaining)")
+                parsed = next_block
+                self._build_queue.pop(0)
+
+            # --- Fast-path: crafting, danger, stuck ---
+            if parsed is None:
+                _stuck_list = getattr(self, '_stuck_positions', [])
+                _actually_stuck = (len(_stuck_list) >= 5 and len(set(_stuck_list[-5:])) == 1)
+                use_fast_path = (
+                    decision.action_hint in ("craft",)
+                    or (decision.priority >= 0.9 and decision.action_hint in ("attack", "flee"))
+                    or _actually_stuck
+                )
+                if use_fast_path:
+                    parsed = self._decision_to_action(decision, perception)
+                    if parsed:
+                        logger.debug(f"FAST-PATH: priority={decision.priority:.2f} hint={decision.action_hint} → {parsed.action}")
 
             if parsed is None:
                 # Primary path: LLM action decision informed by plan + retrieval
@@ -1032,6 +1090,16 @@ Respond ONLY with valid JSON:
                 if not self._running:
                     return
                 parsed = self.executor.parse_action(action_str)
+
+                # Handle build() action — LLM returns a multi-block placement plan
+                if parsed and parsed.action == "build":
+                    self._build_queue = self._expand_build(parsed, perception)
+                    if self._build_queue:
+                        parsed = self._build_queue.pop(0)
+                        logger.debug(f"BUILD-QUEUE: expanded build into {len(self._build_queue)+1} blocks, starting first")
+                    else:
+                        parsed = None
+
                 # If LLM returned unparseable, fall back to fast-path heuristics
                 if parsed is None or parsed.action == "idle":
                     logger.debug(f"LLM-PATH: unparseable/idle, trying fast-path fallback")

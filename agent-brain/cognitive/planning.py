@@ -227,7 +227,8 @@ Relevant memories:
 Available actions:
 - move_to(x, y, z): Walk to coordinates
 - mine_block(x, y, z): Mine the block at given position — use exact coordinates from "Nearby blocks" above!
-- place_block(block_type, x, y, z): Place a block
+- place_block(block_type, x, y, z): Place a single block
+- build(type=shelter, material=dirt, x, y, z): Build a 3x3 structure (shelter/hut) at the given position. Uses material from inventory. Much faster than placing blocks one by one! Use this when you need a shelter.
 - craft(item): Craft an item — ONLY items listed in "CAN CRAFT NOW". Use exact item names.
 - look_at(x, y, z): Look at a position
 - chat(message): Send a chat message

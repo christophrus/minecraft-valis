@@ -138,10 +138,11 @@ RELEVANT MEMORIES (weighted by importance+recency+relevance):
 {reflection_text}
 {discrepancy_text}
 
-action_hint choices: mine|craft|place|move|explore|hunt|socialize|rest
+action_hint choices: mine|craft|place|build|move|explore|hunt|socialize|rest
 
 To craft: use action_hint "craft" and specify the item name in intent. Only craft items listed in CAN CRAFT NOW.
 To get missing materials: mine or gather what ALMOST CRAFTABLE shows.
+To build a shelter: use action_hint "build". The agent will construct a 3x3 shelter automatically.
 
 Output ONLY JSON:
 {{"intent": "what and where", "reason": "why (1 sentence)", "priority": 0-10, "action_hint": "mine|craft|...", "chat_hint": ""}}"""

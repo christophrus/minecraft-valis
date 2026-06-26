@@ -99,9 +99,13 @@ class Executor:
                                  "look_at", "look", "face"}
                 if action_name in coord_actions and len(parts) >= 3:
                     params = {"x": _parse_num(parts[0]), "y": _parse_num(parts[1]), "z": _parse_num(parts[2])}
-                elif action_name in ("place_block", "place", "build") and len(parts) >= 4:
+                elif action_name in ("place_block", "place") and len(parts) >= 4:
                     params = {"block_type": parts[0], "x": _parse_num(parts[1]),
                               "y": _parse_num(parts[2]), "z": _parse_num(parts[3])}
+                elif action_name == "build" and len(parts) >= 4:
+                    params = {"type": parts[0], "material": parts[1],
+                              "x": _parse_num(parts[2]), "y": _parse_num(parts[3]),
+                              "z": _parse_num(parts[4]) if len(parts) > 4 else 0}
                 elif action_name in ("chat", "say", "speak", "talk"):
                     params = {"message": params_str}
                 elif action_name in ("craft",):
@@ -120,7 +124,7 @@ class Executor:
             "dig": "mine_block",
             "place_block": "place_block",
             "place": "place_block",
-            "build": "place_block",
+            "build": "build",
             "look_at": "look_at",
             "look": "look_at",
             "face": "look_at",
