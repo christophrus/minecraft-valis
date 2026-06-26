@@ -235,25 +235,36 @@ class ValisAgent:
                 return AgentAction(agent_name="", action="place_block",
                                    params={"block_type": "crafting_table", "x": tx, "y": ty, "z": tz})
 
+        # A crafting table is "available" if we hold one, placed one, or see one nearby.
+        # Reset the placed flag if we wandered far from where we put it.
+        if self._crafting_table_placed and self._crafting_table_pos:
+            ctx, cty, ctz = self._crafting_table_pos
+            if abs(px - ctx) + abs(py - cty) + abs(pz - ctz) > 16:
+                self._crafting_table_placed = False
+                self._crafting_table_pos = None
+        has_any_table = (inv.get("crafting_table", 0) >= 1
+                         or self._crafting_table_placed or has_crafting_table_nearby)
+
+        # Tech-tree progression. Order matters: keep a plank buffer (>=6) so we never
+        # deadlock at exactly 4 planks (where the only affordable craft was a 2nd table).
         craft_action = None
-        if total_logs >= 1 and total_planks < 4:
+        if total_logs >= 1 and total_planks < 6:
             best_log = _find_best(all_logs)
             plank_type = best_log.replace("_log", "_planks") if best_log else "oak_planks"
             if plank_type not in self._recently_crafted:
                 craft_action = AgentAction(agent_name="", action="craft", params={"item": plank_type})
                 logger.debug(f"FAST-CRAFT: pre-emptive CRAFT planks ({best_log}={inv.get(best_log,0)})")
-        # Crafting table: when we have 4+ planks, no table in inventory
-        elif total_planks >= 4 and inv.get("crafting_table", 0) < 1:
-            if self._crafting_table_placed and self._crafting_table_pos:
-                ctx, cty, ctz = self._crafting_table_pos
-                table_dist = abs(px - ctx) + abs(py - cty) + abs(pz - ctz)
-                if table_dist > 16:
-                    self._crafting_table_placed = False
-                    self._crafting_table_pos = None
+        # Crafting table: ONLY if none exists anywhere (don't burn planks on duplicates)
+        elif not has_any_table and total_planks >= 4:
             if "crafting_table" not in self._recently_crafted:
                 craft_action = AgentAction(agent_name="", action="craft", params={"item": "crafting_table"})
                 logger.debug(f"FAST-CRAFT: pre-emptive CRAFT crafting_table (planks={total_planks})")
-        # Pickaxe: 3 planks + 2 sticks (needs table — placed above)
+        # Sticks: need them for every tool; only planks required (no table). Keep >=3 for a pickaxe.
+        elif total_sticks < 2 and total_planks >= 5:
+            if "stick" not in self._recently_crafted:
+                craft_action = AgentAction(agent_name="", action="craft", params={"item": "stick"})
+                logger.debug(f"FAST-CRAFT: pre-emptive CRAFT sticks (planks={total_planks}, sticks={total_sticks})")
+        # Pickaxe: 3 planks + 2 sticks (needs a table nearby — placed above if we had one)
         elif total_sticks >= 2 and total_planks >= 3 and not has_pickaxe and has_crafting_table_nearby:
             pickaxe_type = "stone_pickaxe" if inv.get("cobblestone", 0) >= 3 else "wooden_pickaxe"
             if pickaxe_type not in self._recently_crafted:
@@ -264,11 +275,11 @@ class ValisAgent:
             if "wooden_axe" not in self._recently_crafted:
                 craft_action = AgentAction(agent_name="", action="craft", params={"item": "wooden_axe"})
                 logger.debug(f"FAST-CRAFT: pre-emptive CRAFT wooden_axe (sticks={total_sticks}, planks={total_planks})")
-        # Sticks: from surplus planks (>= 5 so >=3 remain for a tool)
-        elif total_sticks < 4 and total_planks >= 5:
+        # Top up sticks for the second tool once the first is done.
+        elif total_sticks < 2 and total_planks >= 4 and has_pickaxe:
             if "stick" not in self._recently_crafted:
                 craft_action = AgentAction(agent_name="", action="craft", params={"item": "stick"})
-                logger.debug(f"FAST-CRAFT: pre-emptive CRAFT sticks (planks={total_planks}, sticks={total_sticks})")
+                logger.debug(f"FAST-CRAFT: top-up sticks for axe (planks={total_planks})")
 
         if craft_action:
             item = craft_action.params.get("item", "")
@@ -469,6 +480,18 @@ class ValisAgent:
                         if word in inv and word.lower() not in NON_PLACEABLE:
                             intent_block = word
                             break
+                    # Don't re-place a crafting table we already placed/see nearby — this caused
+                    # a perception-lag loop that hammered place_block into the tree canopy.
+                    if intent_block == "crafting_table":
+                        table_nearby = (
+                            self._crafting_table_placed or
+                            any(b.get("type","").upper() == "CRAFTING_TABLE"
+                                and abs(b.get("x",0)-px) <= 4 and abs(b.get("z",0)-pz) <= 4
+                                for b in blocks)
+                        )
+                        if table_nearby:
+                            logger.debug("FAST-PATH: crafting_table already placed/nearby, skipping re-place")
+                            return None
                     if intent_block and inv.get(intent_block, 0) >= 1:
                         place_mat = intent_block
                     elif inv:
