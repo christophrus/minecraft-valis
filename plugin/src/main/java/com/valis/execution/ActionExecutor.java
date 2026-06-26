@@ -330,6 +330,11 @@ public class ActionExecutor {
      * Place a block at the specified position.
      */
     private void placeBlock(JsonObject params) {
+        if (!params.has("x") || !params.has("y") || !params.has("z") || !params.has("block_type")) {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "place_block",
+                    false, "missing params (need x, y, z, block_type)");
+            return;
+        }
         int x = (int) params.get("x").getAsDouble();
         int y = (int) params.get("y").getAsDouble();
         int z = (int) params.get("z").getAsDouble();

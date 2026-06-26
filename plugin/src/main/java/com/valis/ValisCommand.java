@@ -164,7 +164,7 @@ public class ValisCommand implements CommandExecutor {
                 int slot = 0;
                 for (var entry : inv.entrySet()) {
                     Material mat = Material.matchMaterial(entry.getKey().toUpperCase());
-                    if (mat == null || mat == Material.AIR) continue;
+                    if (mat == null || mat == Material.AIR || !mat.isItem()) continue;
                     int count = Math.min(entry.getValue(), mat.getMaxStackSize());
                     ItemStack item = new ItemStack(mat, count);
                     gui.setItem(slot++, item);

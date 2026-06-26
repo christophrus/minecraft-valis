@@ -189,7 +189,7 @@ public class ValisPlugin extends JavaPlugin {
         for (var item : inv.entrySet()) {
             if (slot >= gui.getSize()) break;
             Material mat = Material.matchMaterial(item.getKey().toUpperCase());
-            if (mat == null || mat == Material.AIR) continue;
+            if (mat == null || mat == Material.AIR || !mat.isItem()) continue;
             int count = Math.min(item.getValue(), mat.getMaxStackSize());
             gui.setItem(slot++, new ItemStack(mat, count));
         }
