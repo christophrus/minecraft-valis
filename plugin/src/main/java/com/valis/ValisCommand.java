@@ -118,7 +118,7 @@ public class ValisCommand implements CommandExecutor {
                 player.setGameMode(org.bukkit.GameMode.SPECTATOR);
                 player.setSpectatorTarget(entity);
                 plugin.startSpectating(player, name);
-                sender.sendMessage("§6[Valis] §aNow spectating " + name + ". Inventory shown in action bar. Use /valis tp <name> to stop.");
+                sender.sendMessage("§6[Valis] §aNow spectating " + name + ". Use /valis tp <name> to stop.");
             }
             case "tp" -> {
                 if (args.length < 2) {
