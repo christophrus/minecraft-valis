@@ -221,9 +221,13 @@ class ValisAgent:
         )
         _REPLACEABLE = frozenset({"AIR","CAVE_AIR","VOID_AIR","SHORT_GRASS","TALL_GRASS",
                                     "FERN","LARGE_FERN","DEAD_BUSH","SNOW","VINE","LEAF_LITTER"})
-        # Will we want to craft a table-requiring tool this tick? (pickaxe/axe/sword)
-        wants_tool = (total_sticks >= 2 and total_planks >= 3
-                      and (not has_pickaxe or not any("axe" in k.lower() for k in inv)))
+        # Will we want to craft a table-requiring tool soon? (pickaxe/axe/sword all need a
+        # table). Place the table whenever we hold one, none is nearby, and we have the
+        # materials for any such tool — otherwise an LLM-chosen sword craft fails with
+        # "need nearby crafting_table" because we never put the table down.
+        has_sword = any("sword" in k.lower() for k in inv)
+        wants_tool = (total_sticks >= 1 and total_planks >= 2
+                      and (not has_pickaxe or not any("axe" in k.lower() for k in inv) or not has_sword))
         if has_crafting_table_inv and not has_crafting_table_nearby and wants_tool:
             tx, ty, tz = px, py + 1, pz
             blocked = any(b.get("x",0)==tx and b.get("y",0)==ty and b.get("z",0)==tz
@@ -895,11 +899,19 @@ class ValisAgent:
                 mkey = f"{coord_match.group(1)},{coord_match.group(2)},{coord_match.group(3)}"
                 self._recently_mined[mkey] = __import__('time').time()
 
-        # Clear build queue on place_block failure — don't keep hammering invalid positions
+        # Build-queue failure handling: only abort when we've run OUT of material.
+        # A "position occupied" just means that cell already has terrain (e.g. the floor
+        # ring overlaps the ground) — skip it and keep building the rest of the shelter
+        # instead of throwing the whole structure away on the first such block.
         if not result.success and result.action == "place_block" and self._build_queue:
-            dropped = len(self._build_queue)
-            self._build_queue.clear()
-            logger.warning(f"BUILD-QUEUE: cleared {dropped} queued blocks after place_block failure: {result.details}")
+            details = (result.details or "").lower()
+            out_of_material = "missing" in details or "don't have" in details or "no " in details
+            if out_of_material:
+                dropped = len(self._build_queue)
+                self._build_queue.clear()
+                logger.warning(f"BUILD-QUEUE: out of material, cleared {dropped} blocks: {result.details}")
+            else:
+                logger.debug(f"BUILD-QUEUE: skipping blocked cell ({len(self._build_queue)} left): {result.details}")
 
         # Track repeated failures to avoid retrying the same broken action
         if not result.success:
@@ -1005,10 +1017,25 @@ Respond ONLY with valid JSON:
         cz = int(params.get("z", 0))
         build_type = str(params.get("type", "shelter")).lower()
 
-        queue: list[AgentAction] = []
+        # Build a material pool from inventory so the shelter draws on ALL available
+        # building blocks, not a single type. The agent typically has wood spread across
+        # oak/birch logs+planks; a single-material build runs out after 3-4 blocks.
+        BUILD_MATERIALS = ("dirt", "cobblestone", "oak_planks", "birch_planks", "spruce_planks",
+                           "jungle_planks", "acacia_planks", "dark_oak_planks", "oak_log",
+                           "birch_log", "spruce_log", "jungle_log", "cobbled_deepslate", "stone")
+        pool: list[str] = []
+        if perception:
+            inv = perception.inventory
+            for m in BUILD_MATERIALS:
+                pool.extend([m] * inv.get(m, 0))
+        # Keep the requested material first so it's used preferentially.
+        pool.sort(key=lambda m: 0 if m == material else 1)
+        if not pool:
+            pool = [material]  # fall back to the requested material (queue will stop on failure)
 
+        # Collect the cells to fill (hollow 3x3x3 box with a doorway), then assign materials.
+        cells: list[tuple[int, int, int]] = []
         if build_type in ("shelter", "hut", "house", "wall"):
-            # 3x3 shelter: walls at floor level + 1 block up, roof on top, hollow inside
             # Floor plan (relative to center cx, cz):
             #  W W W
             #  W . W    (. = interior, W = wall)
@@ -1016,22 +1043,25 @@ Respond ONLY with valid JSON:
             for dy in range(3):  # 3 layers: floor-walls, upper-walls, roof
                 for dx in [-1, 0, 1]:
                     for dz in [-1, 0, 1]:
-                        bx, by, bz = cx + dx, cy + dy, cz + dz
                         if dy < 2:
-                            # Wall layers: place only perimeter blocks, skip interior
                             if dx == 0 and dz == 0:
                                 continue  # hollow interior
-                            # Leave a doorway at (cx, cy, cz+1) and (cx, cy+1, cz+1)
-                            if dx == 0 and dz == 1 and dy < 2:
-                                continue
-                        # Roof layer (dy==2): place all 9 blocks
-                        queue.append(AgentAction(
-                            agent_name="",
-                            action="place_block",
-                            params={"block_type": material, "x": bx, "y": by, "z": bz},
-                        ))
+                            if dx == 0 and dz == 1:
+                                continue  # doorway
+                        cells.append((cx + dx, cy + dy, cz + dz))
 
-        logger.info(f"BUILD: expanded '{build_type}' at ({cx},{cy},{cz}) into {len(queue)} place_block actions")
+        queue: list[AgentAction] = []
+        for i, (bx, by, bz) in enumerate(cells):
+            if i >= len(pool):
+                break  # out of material — build what we can
+            queue.append(AgentAction(
+                agent_name="",
+                action="place_block",
+                params={"block_type": pool[i], "x": bx, "y": by, "z": bz},
+            ))
+
+        logger.info(f"BUILD: expanded '{build_type}' at ({cx},{cy},{cz}) into {len(queue)} "
+                    f"place_block actions ({len(cells)} cells, {len(pool)} materials available)")
         return queue
 
     def _try_start_build(self, decision, perception: PerceptionData) -> AgentAction | None:
@@ -1047,15 +1077,12 @@ Respond ONLY with valid JSON:
         build_mats = ("dirt", "cobblestone", "oak_planks", "birch_planks", "spruce_planks",
                       "jungle_planks", "acacia_planks", "dark_oak_planks", "oak_log",
                       "birch_log", "spruce_log", "jungle_log")
-        material, mat_count = None, 0
-        for m in build_mats:
-            c = inv.get(m, 0)
-            if c > mat_count:
-                material, mat_count = m, c
-        # A 3x3 shelter needs ~20 blocks; start if we have a reasonable stock (>=8),
-        # the build queue itself stops gracefully when material runs out.
-        if not material or mat_count < 8:
-            logger.debug(f"FAST-BUILD: not enough material (best={material}:{mat_count}), deferring")
+        # Count the TOTAL building stock across all types — the shelter draws on all of them,
+        # so a few planks + a few logs together is enough even if no single type is.
+        total_mat = sum(inv.get(m, 0) for m in build_mats)
+        material = max(build_mats, key=lambda m: inv.get(m, 0))
+        if total_mat < 12:
+            logger.debug(f"FAST-BUILD: not enough material (total={total_mat}, best={material}:{inv.get(material,0)}), deferring")
             return None
         if getattr(self, '_recently_built', 0) and time.time() - self._recently_built < 120:
             return None
@@ -1069,7 +1096,7 @@ Respond ONLY with valid JSON:
         if not self._build_queue:
             return None
         self._recently_built = time.time()
-        logger.info(f"FAST-BUILD: starting shelter with {material} ({mat_count} avail) at ({cx},{cy},{cz})")
+        logger.info(f"FAST-BUILD: starting shelter ({total_mat} total material) at ({cx},{cy},{cz})")
         return self._build_queue.pop(0)
 
     def _perception_changed_significantly(self, perception: PerceptionData) -> bool:
@@ -1111,13 +1138,15 @@ Respond ONLY with valid JSON:
         self._action_result_ready = False
 
         # Cap consecutive fast-ticks so the LLM planner keeps setting direction.
-        # After 6 heuristic actions in a row, force a full LLM tick.
+        # After 10 heuristic actions in a row, force a full LLM tick. The heuristics
+        # (crafting, building, mining, canopy descent) are robust enough that longer
+        # fast-tick runs are safe and meaningfully raise actions-per-minute.
         if is_fast_tick:
             self._consecutive_fast_ticks = getattr(self, '_consecutive_fast_ticks', 0) + 1
-            if self._consecutive_fast_ticks >= 6:
+            if self._consecutive_fast_ticks >= 10:
                 is_fast_tick = False
                 self._consecutive_fast_ticks = 0
-                logger.debug("FAST-TICK-CAP: forcing full LLM tick after 6 fast-ticks")
+                logger.debug("FAST-TICK-CAP: forcing full LLM tick after 10 fast-ticks")
         else:
             self._consecutive_fast_ticks = 0
 
