@@ -339,9 +339,21 @@ public class ActionExecutor {
         if (world == null) return;
 
         Block block = world.getBlockAt(x, y, z);
-        if (block.getType() != Material.AIR) {
+        Material existing = block.getType();
+        boolean replaceable = existing == Material.AIR
+                || existing == Material.CAVE_AIR
+                || existing == Material.VOID_AIR
+                || existing == Material.SHORT_GRASS
+                || existing == Material.TALL_GRASS
+                || existing == Material.FERN
+                || existing == Material.LARGE_FERN
+                || existing == Material.DEAD_BUSH
+                || existing == Material.SNOW
+                || existing == Material.VINE
+                || existing.name().contains("LEAF_LITTER");
+        if (!replaceable) {
             plugin.getWsBridge().sendActionResult(agent.getAgentName(), "place_block",
-                    false, "position occupied by " + block.getType().name());
+                    false, "position occupied by " + existing.name());
             return;
         }
 
@@ -388,12 +400,15 @@ public class ActionExecutor {
         boolean crafted = false;
         for (var recipe : recipes) {
             if (recipe instanceof org.bukkit.inventory.ShapedRecipe shaped) {
-                // Check if recipe needs a crafting table (more than 4 ingredient slots = 3x3 grid)
-                int filledSlots = 0;
-                for (var choice : shaped.getChoiceMap().values()) {
-                    if (choice != null) filledSlots++;
+                // Check if recipe needs a crafting table (shape exceeds 2x2 grid)
+                String[] shape = shaped.getShape();
+                boolean needs3x3 = shape.length > 2;
+                if (!needs3x3) {
+                    for (String row : shape) {
+                        if (row.length() > 2) { needs3x3 = true; break; }
+                    }
                 }
-                if (filledSlots > 4) {
+                if (needs3x3) {
                     // 3x3 recipe — requires a nearby crafting table
                     Location agentLoc = agent.getNpc() != null && agent.getNpc().isSpawned()
                             ? agent.getNpc().getEntity().getLocation() : null;

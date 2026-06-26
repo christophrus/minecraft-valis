@@ -292,12 +292,13 @@ class ValisAgent:
             any(b.get("type", "").upper() == "CRAFTING_TABLE" and abs(b.get("x",0)-px) <= 3 and abs(b.get("z",0)-pz) <= 3
                 for b in blocks)
         )
+        _REPLACEABLE = frozenset({"AIR","CAVE_AIR","VOID_AIR","SHORT_GRASS","TALL_GRASS",
+                                    "FERN","LARGE_FERN","DEAD_BUSH","SNOW","VINE","LEAF_LITTER"})
         if has_crafting_table_inv and not has_crafting_table_nearby:
             # Place crafting table at agent's feet+1
             tx, ty, tz = px, py + 1, pz
-            # Check if position is air
             blocked = any(b.get("x",0)==tx and b.get("y",0)==ty and b.get("z",0)==tz
-                          and b.get("type","").upper() not in ("AIR","CAVE_AIR","VOID_AIR") for b in blocks)
+                          and b.get("type","").upper() not in _REPLACEABLE for b in blocks)
             if not blocked:
                 logger.debug(f"FAST-PATH: placing crafting_table at ({tx},{ty},{tz})")
                 self._crafting_table_placed = True
