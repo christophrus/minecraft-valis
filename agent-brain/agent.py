@@ -341,6 +341,21 @@ class ValisAgent:
         if fast_craft:
             return fast_craft
 
+        # --- PROACTIVE CANOPY DESCENT ---
+        # If the agent is standing on a LEAF block, it climbed into a tree and will get
+        # stuck (Citizens can't path down through the canopy). Leaves are never legitimate
+        # standing ground, so mine straight down immediately instead of waiting for the
+        # 5-tick stuck detector. This was the root of the repeated NAV-STALL teleports.
+        below = next((b for b in blocks
+                      if b.get("x",0)==px and b.get("y",0)==py-1 and b.get("z",0)==pz), None)
+        if below and "_LEAVES" in below.get("type","").upper() and py > 65:
+            tkey = f"{px},{py-1},{pz}"
+            if tkey not in self._recently_mined:
+                logger.warning(f"FAST-PATH: CANOPY-DESCENT (proactive) mining leaves below at ({px},{py-1},{pz})")
+                self._recently_mined[tkey] = now
+                return AgentAction(agent_name="", action="mine_block",
+                                   params={"x": px, "y": py-1, "z": pz})
+
         # --- NON-PLACEABLE ITEMS: never try to place these ---
         NON_PLACEABLE = frozenset({
             "stick", "wheat_seeds", "string", "flint", "feather", "bone",
@@ -365,12 +380,20 @@ class ValisAgent:
             
             # Priority 2: Wood/log blocks nearby (only for mine, not place!)
             if target is None and hint == "mine":
-                wood_blocks = [b for b in blocks if b.get("type", "").upper() in 
-                              ("OAK_LOG", "BIRCH_LOG", "SPRUCE_LOG", "JUNGLE_LOG", "ACACIA_LOG", 
+                wood_blocks = [b for b in blocks if b.get("type", "").upper() in
+                              ("OAK_LOG", "BIRCH_LOG", "SPRUCE_LOG", "JUNGLE_LOG", "ACACIA_LOG",
                                "DARK_OAK_LOG", "CHERRY_LOG", "MANGROVE_LOG", "OAK_WOOD", "BIRCH_WOOD")]
                 wood_blocks = [b for b in wood_blocks if pos_key(b) not in self._recently_mined]
-                if wood_blocks:
-                    target = min(wood_blocks, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
+                # Don't target logs high above us — chasing canopy logs makes the Citizens
+                # pathfinder climb the tree and get stuck in the leaves. Prefer logs at/below
+                # foot level, and break ties by the LOWEST log (harvest the trunk bottom-up).
+                reachable = [b for b in wood_blocks if b.get("y", 0) <= py + 2]
+                candidates = reachable or wood_blocks
+                if candidates:
+                    target = min(candidates, key=lambda b: (
+                        b.get("y", 0),  # lowest first → mine trunk from the bottom
+                        abs(b.get("x",0)-px) + abs(b.get("z",0)-pz),  # then nearest horizontally
+                    ))
                     target_priority = 2
                     logger.debug(f"FAST-PATH: TARGET=wood_heuristic -> {target.get('type','?')} at ({target.get('x')},{target.get('y')},{target.get('z')})")
             
@@ -631,6 +654,22 @@ class ValisAgent:
                 and len(self._stuck_positions) >= 5
                 and len(set(self._stuck_positions[-5:])) == 1):
                 logger.warning(f"FAST-PATH: STUCK at ({px},{py},{pz}) for 5 ticks, resetting nav+explore")
+                # CANOPY DESCENT: if we're stuck standing ON leaves/logs (trapped in a tree),
+                # mine the block directly below to drop straight down. The N/E/S/W dig below
+                # deliberately skips leaves/logs, so without this the agent can never get out
+                # of a canopy and has to wait many ticks for the teleport fallback.
+                below_block = next((b for b in blocks
+                                    if b.get("x",0)==px and b.get("y",0)==py-1 and b.get("z",0)==pz), None)
+                if below_block:
+                    below_type = below_block.get("type","").upper()
+                    if ("_LEAVES" in below_type or "_LOG" in below_type) and py > 65:
+                        tkey = f"{px},{py-1},{pz}"
+                        if tkey not in self._recently_mined:
+                            logger.warning(f"FAST-PATH: CANOPY-DESCENT mining {below_type} below at ({px},{py-1},{pz}) to drop down")
+                            self._recently_mined[tkey] = now
+                            self._stuck_positions = []
+                            return AgentAction(agent_name="", action="mine_block",
+                                               params={"x": px, "y": py-1, "z": pz})
                 # Before jumping, try to mine our way out — dig blocks around us
                 if not hasattr(self, '_stuck_mine_attempts'):
                     self._stuck_mine_attempts = 0
