@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 
 try:
     from .bridge.protocol import (
-        AgentAction, AgentChat, PerceptionData, ActionResult,
+        AgentAction, AgentChat, AgentState, PerceptionData, ActionResult,
     )
     from .llm.providers import LLMProvider, create_llm
     from .memory import MemoryStream, MemoryRetrieval
@@ -28,7 +28,7 @@ try:
     )
 except ImportError:
     from bridge.protocol import (
-        AgentAction, AgentChat, PerceptionData, ActionResult,
+        AgentAction, AgentChat, AgentState, PerceptionData, ActionResult,
     )
     from llm.providers import LLMProvider, create_llm
     from memory import MemoryStream, MemoryRetrieval
@@ -1095,6 +1095,17 @@ Respond ONLY with valid JSON:
                 )
 
                 await self.bridge.send_action(parsed)
+
+                # Send cognitive state for spectator HUD
+                plan_summary = self.planner.daily_plan[0] if self.planner.daily_plan else ""
+                state = AgentState(
+                    agent_name=self.name,
+                    current_task=self.planner.current_task[:80],
+                    reason=decision.reason[:80],
+                    action=f"{parsed.action} {parsed.params}",
+                    plan_summary=plan_summary[:60],
+                )
+                await self.bridge.send_state(state)
 
                 # If the controller suggests chatting, do that too
                 if decision.chat_hint and decision.action_hint == "socialize":

@@ -4,7 +4,11 @@ import com.valis.agent.VirtualAgent;
 import com.valis.bridge.WebSocketBridge;
 import com.valis.config.ValisConfig;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextColor;
+import net.kyori.adventure.text.format.TextDecoration;
+import net.kyori.adventure.title.Title;
+import java.time.Duration;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -93,7 +97,7 @@ public class ValisPlugin extends JavaPlugin {
             }
         }
 
-        // Show agent inventory to spectating players every 2 seconds
+        // Spectator HUD — shows agent cognitive state + inventory
         getServer().getScheduler().runTaskTimer(this, () -> {
             for (var entry : spectatingPlayers.entrySet()) {
                 Player player = entry.getKey();
@@ -102,19 +106,50 @@ public class ValisPlugin extends JavaPlugin {
                     spectatingPlayers.remove(player);
                     continue;
                 }
+
+                // Action Bar: inventory summary
                 var inv = agent.getInventory();
-                String text;
+                String invText;
                 if (inv.isEmpty()) {
-                    text = "§7[§b" + agent.getAgentName() + "§7] §fInventory: §7empty";
+                    invText = "§7Inventory: §8empty";
                 } else {
                     StringBuilder sb = new StringBuilder();
                     for (var item : inv.entrySet()) {
-                        if (sb.length() > 0) sb.append(" §7|§f ");
-                        sb.append(item.getKey()).append(":§e").append(item.getValue());
+                        if (sb.length() > 0) sb.append(" §7| ");
+                        sb.append("§f").append(item.getKey()).append("§7:§e").append(item.getValue());
                     }
-                    text = "§7[§b" + agent.getAgentName() + "§7] §f" + sb.toString();
+                    invText = sb.toString();
                 }
-                player.sendActionBar(Component.text(text));
+                player.sendActionBar(Component.text(invText));
+
+                // Title: cognitive state (action + reason + task)
+                String action = agent.getCognitiveAction();
+                String reason = agent.getCognitiveReason();
+                String task = agent.getCognitiveTask();
+                String plan = agent.getCognitivePlan();
+
+                if (action != null && !action.isEmpty()) {
+                    // Title line: current action
+                    Component title = Component.text("⚡ ", NamedTextColor.YELLOW)
+                            .append(Component.text(action, NamedTextColor.WHITE));
+
+                    // Subtitle: reason + current plan goal
+                    Component subtitle;
+                    if (reason != null && !reason.isEmpty()) {
+                        subtitle = Component.text("💭 ", NamedTextColor.AQUA)
+                                .append(Component.text(reason, NamedTextColor.GRAY));
+                        if (plan != null && !plan.isEmpty()) {
+                            subtitle = subtitle.append(Component.text("  📋 ", NamedTextColor.GREEN))
+                                    .append(Component.text(plan, NamedTextColor.DARK_GREEN));
+                        }
+                    } else {
+                        subtitle = Component.empty();
+                    }
+
+                    Title.Times times = Title.Times.times(
+                            Duration.ZERO, Duration.ofSeconds(3), Duration.ofMillis(500));
+                    player.showTitle(Title.title(title, subtitle, times));
+                }
             }
         }, 20L, 40L);  // every 2 seconds
     }

@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import websockets
 from websockets.exceptions import ConnectionClosed
 
-from .protocol import parse_message, PerceptionData, ActionResult, AgentAction, AgentChat, SpawnRequest, DespawnRequest
+from .protocol import parse_message, PerceptionData, ActionResult, AgentAction, AgentChat, AgentState, SpawnRequest, DespawnRequest
 
 if TYPE_CHECKING:
     from ..agent import AgentManager
@@ -140,3 +140,6 @@ class BridgeClient:
 
     async def send_despawn(self, request: DespawnRequest):
         await self.send(request.to_json())
+
+    async def send_state(self, state: AgentState):
+        await self.send(state.to_json())

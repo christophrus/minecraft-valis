@@ -37,10 +37,16 @@ public class VirtualAgent {
     private int tickCounter = 0;
     private final Map<String, Integer> inventory = new HashMap<>();
 
+    // Cognitive state for spectator HUD
+    private volatile String cognitiveTask = "";
+    private volatile String cognitiveReason = "";
+    private volatile String cognitiveAction = "";
+    private volatile String cognitivePlan = "";
+
     // Chunk loading — NPCs don't trigger chunk loading like players do.
     // We use Paper's plugin chunk ticket API to keep chunks loaded around the agent.
     private int[] _lastChunkCenter = null;
-    private java.util.List<int[]> _chunkTickets = null;  // material_name -> count
+    private java.util.List<int[]> _chunkTickets = null;
 
     public VirtualAgent(ValisPlugin plugin, String name, String personality, Location spawn) {
         this.plugin = plugin;
@@ -194,6 +200,18 @@ public class VirtualAgent {
     }
     public WorldObserver getObserver() { return observer; }
     public int getTickCounter() { return tickCounter; }
+
+    public void updateCognitiveState(String task, String reason, String action, String plan) {
+        this.cognitiveTask = task;
+        this.cognitiveReason = reason;
+        this.cognitiveAction = action;
+        this.cognitivePlan = plan;
+    }
+
+    public String getCognitiveTask() { return cognitiveTask; }
+    public String getCognitiveReason() { return cognitiveReason; }
+    public String getCognitiveAction() { return cognitiveAction; }
+    public String getCognitivePlan() { return cognitivePlan; }
 
     // --- Inventory ---
     public Map<String, Integer> getInventory() { return inventory; }

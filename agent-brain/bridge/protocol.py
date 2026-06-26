@@ -102,6 +102,26 @@ class AgentChat:
 
 
 @dataclass
+class AgentState:
+    """Cognitive state update sent to Minecraft for spectator HUD."""
+    agent_name: str
+    current_task: str
+    reason: str
+    action: str
+    plan_summary: str
+
+    def to_json(self) -> dict:
+        return {
+            "type": "agent_state",
+            "name": self.agent_name,
+            "current_task": self.current_task,
+            "reason": self.reason,
+            "action": self.action,
+            "plan_summary": self.plan_summary,
+        }
+
+
+@dataclass
 class SpawnRequest:
     """Request to spawn a new agent."""
     name: str

@@ -88,6 +88,7 @@ public class WebSocketBridge extends WebSocketServer {
                 case "agent_despawn" -> handleAgentDespawn(msg);
                 case "agent_action" -> handleAgentAction(msg);
                 case "agent_chat" -> handleAgentChat(msg);
+                case "agent_state" -> handleAgentState(msg);
                 default -> log.warning("Unknown message type: " + type);
             }
         } catch (Exception e) {
@@ -165,6 +166,19 @@ public class WebSocketBridge extends WebSocketServer {
                 agent.sendChat(text);
             }
         });
+    }
+
+    private void handleAgentState(JsonObject msg) {
+        String name = msg.get("name").getAsString();
+        String task = msg.has("current_task") ? msg.get("current_task").getAsString() : "";
+        String reason = msg.has("reason") ? msg.get("reason").getAsString() : "";
+        String action = msg.has("action") ? msg.get("action").getAsString() : "";
+        String plan = msg.has("plan_summary") ? msg.get("plan_summary").getAsString() : "";
+
+        VirtualAgent agent = plugin.getAgents().get(name);
+        if (agent != null) {
+            agent.updateCognitiveState(task, reason, action, plan);
+        }
     }
 
     // --- Outgoing Messages ---
