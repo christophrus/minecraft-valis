@@ -118,8 +118,21 @@ class CognitiveController:
                      for c in perception.almost_craftable[:5]]
             almost_text = "ALMOST CRAFTABLE: " + " | ".join(items)
 
+        # Personality block — biases decisions toward role specialization
+        personality_block = ""
+        traits = getattr(agent, 'traits', None) or []
+        focus = getattr(agent, 'focus', "") or ""
+        if traits or focus:
+            trait_str = ", ".join(traits) if traits else "balanced"
+            personality_block = (
+                f"YOU ARE A {agent.personality.upper()} (traits: {trait_str}).\n"
+                f"ROLE FOCUS: {focus}\n"
+                f"Bias decisions toward your role. Only deviate when survival demands it.\n"
+            )
+
         prompt = f"""You control {agent.name}, an AI in Minecraft. Pick ONE action. Be concise — output ONLY JSON, max 300 chars.
 
+{personality_block}
 INVENTORY: {inv_text}
 
 PERCEPTION:

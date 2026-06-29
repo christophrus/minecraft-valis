@@ -1,0 +1,23 @@
+# Initial village roster — agents auto-spawned after bridge connects.
+# Each agent gets a personality from agents.yaml (traits + initial_goals + role focus).
+# Offsets place agents around the spawn point to avoid overlap.
+#
+# Comment out lines to disable specific agents, or set `enabled: false` for all to opt out.
+
+enabled: true
+
+agents:
+  - name: MinerBob
+    personality: miner
+    offset_x: 0
+    offset_z: 2
+
+  - name: BuilderAlice
+    personality: builder
+    offset_x: 2
+    offset_z: 0
+
+  - name: ScoutCarol
+    personality: explorer
+    offset_x: -2
+    offset_z: 0

@@ -44,13 +44,14 @@ logger = logging.getLogger("valis.agent")
 class AgentConfig:
     """Configuration for a single agent."""
     name: str = "Agent"
-    personality: str = "curious explorer"
+    personality: str = "default"
     llm_provider: str = field(default_factory=lambda: os.environ.get("VALIS_DEFAULT_LLM", "ollama"))
     llm_model: str = field(default_factory=lambda: os.environ.get("VALIS_DEFAULT_MODEL", "mistral"))
     data_dir: str = field(default_factory=lambda: os.environ.get("VALIS_DATA_DIR", "data"))
     tick_rate: float = 2.0
     traits: list[str] = field(default_factory=list)
     initial_goals: list[str] = field(default_factory=list)
+    focus: str = ""  # one-line description of role/specialization
 
 
 class ValisAgent:
@@ -71,6 +72,8 @@ class ValisAgent:
         self.config = config
         self.name = config.name
         self.personality = config.personality
+        self.traits = config.traits
+        self.focus = config.focus
         self.bridge = bridge
         self.tick_count = 0
         self.agent_id = uuid.uuid4().hex[:12]
@@ -138,8 +141,16 @@ class ValisAgent:
     async def start(self):
         """Start the agent's cognitive loop."""
         self._running = True
-        self.goal_generator.initialize_default_goals()
-        logger.info(f"Agent {self.name} started cognitive loop.")
+        # Seed goal_generator from personality goals if any, else generic defaults
+        if self.config.initial_goals:
+            from cognitive.goal_generation import Goal
+            self.goal_generator.goals = [
+                Goal(description=g, goal_type="survival", priority=0.7)
+                for g in self.config.initial_goals
+            ]
+        else:
+            self.goal_generator.initialize_default_goals()
+        logger.info(f"Agent {self.name} started cognitive loop ({self.personality}).")
 
     async def stop(self):
         """Stop the agent's cognitive loop."""
@@ -1591,27 +1602,85 @@ class AgentManager:
         """Set the WebSocket bridge for agent communication."""
         self._bridge = bridge
 
-    async def spawn_agent(self, name: str, personality: str = "default") -> ValisAgent:
-        """Create and start a new agent."""
+    async def spawn_roster(self):
+        """Auto-spawn the configured village roster on startup.
+
+        Reads spawn_roster.yaml and spawns each listed agent at an offset from
+        world spawn. Idempotent: skips agents that already exist.
+        """
+        try:
+            from config import load_roster
+            roster = load_roster()
+        except Exception as e:
+            logger.warning(f"Roster load failed: {e}")
+            return
+
+        if not roster:
+            return
+
+        logger.info(f"Auto-spawning {len(roster)} agents from roster...")
+        for entry in roster:
+            if entry.name in self.agents:
+                logger.info(f"Roster: {entry.name} already exists, skipping")
+                continue
+            try:
+                await self.spawn_agent_at(
+                    entry.name, entry.personality,
+                    entry.offset_x, entry.offset_y, entry.offset_z,
+                )
+            except Exception as e:
+                logger.warning(f"Roster spawn failed for {entry.name}: {e}")
+
+    async def spawn_agent_at(self, name: str, personality: str,
+                              offset_x: int, offset_y: int, offset_z: int) -> ValisAgent:
+        """Spawn an agent at an offset from world spawn."""
+        agent = await self.spawn_agent(name, personality, send_spawn_msg=False)
+        # Re-send spawn with the offset coordinates
+        if self._bridge:
+            await self._bridge.send({
+                "type": "agent_spawn", "name": name, "personality": personality,
+                "x": offset_x, "y": 64 + offset_y, "z": offset_z,
+            })
+        return agent
+
+    async def spawn_agent(self, name: str, personality: str = "default",
+                          send_spawn_msg: bool = True) -> ValisAgent:
+        """Create and start a new agent.
+
+        Looks up the personality in agents.yaml to populate traits, goals, and focus.
+        """
         if name in self.agents:
             logger.warning(f"Agent {name} already exists, despawning first.")
             await self.despawn_agent(name)
+
+        try:
+            from config import get_personality
+            spec = get_personality(personality)
+            traits = spec["traits"]
+            initial_goals = spec["initial_goals"]
+            focus = spec["focus"]
+        except Exception as e:
+            logger.warning(f"Personality lookup failed for '{personality}': {e}")
+            traits, initial_goals, focus = [], [], ""
 
         config = AgentConfig(
             name=name,
             personality=personality,
             data_dir="data",
             tick_rate=2.0,
+            traits=traits,
+            initial_goals=initial_goals,
+            focus=focus,
         )
         agent = ValisAgent(config, bridge=self._bridge)
         self.agents[name] = agent
         await agent.start()
 
         # Send agent_spawn back to Minecraft to create the NPC
-        if self._bridge:
+        if self._bridge and send_spawn_msg:
             await self._bridge.send({"type": "agent_spawn", "name": name, "personality": personality, "x": 0, "y": 64, "z": 0})
 
-        logger.info(f"Agent spawned: {name} ({personality}). Total agents: {len(self.agents)}")
+        logger.info(f"Agent spawned: {name} ({personality}, traits={traits}). Total agents: {len(self.agents)}")
         return agent
 
     async def handle_player_instruction(self, player: str, text: str):
@@ -1650,9 +1719,19 @@ class AgentManager:
             if perception.agent_name in self._despawned_recently:
                 self._despawned_recently.discard(perception.agent_name)
                 return
-            # Auto-create agent from perception data (server already has the NPC)
-            logger.info(f"Auto-creating agent from perception: {perception.agent_name}")
-            await self.spawn_agent(perception.agent_name, "default")
+            # Auto-create agent from perception data (server already has the NPC).
+            # If the name is on our roster, use that personality; otherwise default.
+            roster_personality = "default"
+            try:
+                from config import load_roster
+                for entry in load_roster():
+                    if entry.name == perception.agent_name:
+                        roster_personality = entry.personality
+                        break
+            except Exception:
+                pass
+            logger.info(f"Auto-creating agent from perception: {perception.agent_name} ({roster_personality})")
+            await self.spawn_agent(perception.agent_name, roster_personality, send_spawn_msg=False)
             agent = self.agents.get(perception.agent_name)
             if agent:
                 agent.receive_perception(perception)
