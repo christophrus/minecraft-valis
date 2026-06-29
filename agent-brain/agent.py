@@ -1066,6 +1066,14 @@ Respond ONLY with valid JSON:
         cz = int(params.get("z", 0))
         build_type = str(params.get("type", "shelter")).lower()
 
+        # Reject builds near ocean/river biomes
+        if perception and hasattr(perception, 'nearby_biomes') and perception.nearby_biomes:
+            ocean_biomes = sum(1 for b in perception.nearby_biomes.values()
+                              if b and ("ocean" in b.lower() or "river" in b.lower() or "beach" in b.lower()))
+            if ocean_biomes >= 1:
+                logger.info(f"BUILD: rejected at ({cx},{cy},{cz}) — {ocean_biomes} ocean/river biomes nearby")
+                return []
+
         # Build a material pool from inventory so the shelter draws on ALL available
         # building blocks, not a single type. The agent typically has wood spread across
         # oak/birch logs+planks; a single-material build runs out after 3-4 blocks.
@@ -1085,7 +1093,7 @@ Respond ONLY with valid JSON:
         # Pre-compute which positions are blocked by non-replaceable blocks
         _REPLACEABLE_BUILD = frozenset({"AIR","CAVE_AIR","VOID_AIR","SHORT_GRASS","TALL_GRASS",
                                         "FERN","LARGE_FERN","DEAD_BUSH","SNOW","VINE","LEAF_LITTER",
-                                        "GRASS_BLOCK","DIRT",
+                                        "GRASS_BLOCK","DIRT","GRAVEL",
                                         "OAK_LEAVES","BIRCH_LEAVES","SPRUCE_LEAVES","JUNGLE_LEAVES",
                                         "ACACIA_LEAVES","DARK_OAK_LEAVES","AZALEA_LEAVES",
                                         "FLOWERING_AZALEA_LEAVES","CHERRY_LEAVES","MANGROVE_LEAVES",
@@ -1149,7 +1157,9 @@ Respond ONLY with valid JSON:
         total_mat = sum(inv.get(m, 0) for m in build_mats)
         material = max(build_mats, key=lambda m: inv.get(m, 0))
         if total_mat < 12:
-            logger.debug(f"FAST-BUILD: not enough material (total={total_mat}, best={material}:{inv.get(material,0)}), deferring")
+            if getattr(self, '_last_build_mat_log', 0) != total_mat:
+                self._last_build_mat_log = total_mat
+                logger.debug(f"FAST-BUILD: not enough material (total={total_mat}, best={material}:{inv.get(material,0)}), deferring")
             return None
         if getattr(self, '_recently_built', 0) and time.time() - self._recently_built < 120:
             return None
@@ -1449,17 +1459,24 @@ Respond ONLY with valid JSON:
             # Fast-tick with nothing to do — explore only if no nav is already running
             if parsed is None and is_fast_tick:
                 if hasattr(self, '_nav_target') and self._nav_target:
-                    logger.debug("FAST-TICK: nav in progress, waiting (not overriding)")
+                    pass  # nav in progress, just wait
                 else:
-                    import random as _ft_rnd
-                    _dx, _dz = _ft_rnd.choice([(1,0),(-1,0),(0,1),(0,-1)])
-                    _dist = _ft_rnd.randint(20, 40)
-                    _fpx = int(perception.position.get("x", 0))
-                    _fpy = int(perception.position.get("y", 0))
-                    _fpz = int(perception.position.get("z", 0))
-                    parsed = AgentAction(agent_name="", action="move_to",
-                                         params={"x": _fpx + _dx * _dist, "y": _fpy, "z": _fpz + _dz * _dist})
-                    logger.debug(f"FAST-TICK-EXPLORE: nothing actionable, exploring ({_fpx + _dx * _dist},{_fpy},{_fpz + _dz * _dist})")
+                    # Rate-limit explores: max 1 every 10 seconds to avoid spamming moves
+                    import time as _ft_time
+                    _last_explore = getattr(self, '_last_explore_time', 0)
+                    if _ft_time.time() - _last_explore < 10:
+                        pass  # too soon, wait for next LLM tick
+                    else:
+                        self._last_explore_time = _ft_time.time()
+                        import random as _ft_rnd
+                        _dx, _dz = _ft_rnd.choice([(1,0),(-1,0),(0,1),(0,-1)])
+                        _dist = _ft_rnd.randint(20, 40)
+                        _fpx = int(perception.position.get("x", 0))
+                        _fpy = int(perception.position.get("y", 0))
+                        _fpz = int(perception.position.get("z", 0))
+                        parsed = AgentAction(agent_name="", action="move_to",
+                                             params={"x": _fpx + _dx * _dist, "y": _fpy, "z": _fpz + _dz * _dist})
+                        logger.debug(f"FAST-TICK-EXPLORE: exploring ({_fpx + _dx * _dist},{_fpy},{_fpz + _dz * _dist})")
 
             # Warn if agent position jumped to spawn (Citizens pathfinder bug)
             if perception and parsed and parsed.action == "move_to":

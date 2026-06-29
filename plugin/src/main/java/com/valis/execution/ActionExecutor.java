@@ -366,6 +366,7 @@ public class ActionExecutor {
                 || existing == Material.VINE
                 || existing == Material.GRASS_BLOCK
                 || existing == Material.DIRT
+                || existing == Material.GRAVEL
                 || existing.name().contains("LEAF_LITTER")
                 || existing.name().contains("LEAVES");
         if (!replaceable) {
