@@ -86,7 +86,7 @@ class ValisAgent:
             agent_name=config.name,
             data_dir=config.data_dir,
             embedding_fn=self.llm.embed,
-            importance_fn=self._score_importance_llm,
+            importance_fn=self._score_importance_heuristic,
         )
         self.retrieval = MemoryRetrieval(self.memory)
 
@@ -147,36 +147,39 @@ class ValisAgent:
         self._perception_event.set()  # Unblock any waiting
         logger.info(f"Agent {self.name} stopped.")
 
-    async def _score_importance_llm(self, content: str) -> float:
-        """Score memory importance (poignancy) on a 0-1 scale via LLM.
+    async def _score_importance_heuristic(self, content: str) -> float:
+        """Score memory importance via keyword heuristics instead of LLM.
 
-        Based on the Generative Agents paper: the LLM rates each memory on a
-        1-10 poignancy scale. We normalize to 0-1.
+        The LLM-based scorer consumed 45% of all API calls (~200 calls, 9 minutes)
+        per session for marginal benefit. Keyword matching is instant and good enough
+        for the recency × relevance × importance retrieval formula.
         """
-        prompt = (
-            "On a scale of 1 (mundane) to 10 (critical), rate the poignancy of "
-            "this Minecraft agent memory. Use the FULL range:\n"
-            "  1-2: Routine, repetitive (e.g. walked forward, looked around)\n"
-            "  3-4: Minor observations (e.g. noticed a tree, picked up item)\n"
-            "  5-6: Useful learning (e.g. found a resource, crafted a tool)\n"
-            "  7-8: Important insight (e.g. discovered a strategy, survived danger)\n"
-            "  9-10: Critical realization (e.g. fundamental strategy change, near-death lesson)\n\n"
-            "Respond with ONLY the number.\n\n"
-            f"Memory: \"{content[:300]}\"\n\nRating:"
-        )
-        try:
-            response = await self.llm.chat([
-                {"role": "system", "content": "Rate memory importance 1-10. Use the full range — most routine memories should be 1-4. Output only a number."},
-                {"role": "user", "content": prompt},
-            ])
-            import re
-            match = re.search(r'(\d+)', response.strip())
-            if match:
-                raw = int(match.group(1))
-                return max(0.1, min(1.0, raw / 10.0))
-        except Exception as e:
-            logger.warning(f"Importance scoring LLM failed: {e}")
-        return 0.5
+        lower = content.lower()
+        score = 0.2
+
+        critical = ["died", "death", "killed", "diamond", "strategy change",
+                     "fundamental", "critical", "emergency", "insight"]
+        important = ["craft", "pickaxe", "axe", "sword", "shelter", "build",
+                      "danger", "attack", "found", "iron", "learned", "reflection",
+                      "goal", "stuck", "escape", "teleport"]
+        moderate = ["mine", "place", "wood", "log", "planks", "stone", "cobblestone",
+                    "resource", "gather", "collect", "inventory"]
+        routine = ["move_to", "idle", "explore", "walk", "look", "navigate"]
+
+        for kw in critical:
+            if kw in lower:
+                score += 0.25
+        for kw in important:
+            if kw in lower:
+                score += 0.1
+        for kw in moderate:
+            if kw in lower:
+                score += 0.05
+        for kw in routine:
+            if kw in lower:
+                score -= 0.05
+
+        return max(0.1, min(1.0, score))
 
     def _try_fast_craft(self, perception: PerceptionData) -> AgentAction | None:
         """Pre-emptive tech-tree progression — craft planks/table/tools and place the
@@ -1071,9 +1074,10 @@ Respond ONLY with valid JSON:
         if not pool:
             pool = [material]  # fall back to the requested material (queue will stop on failure)
 
-        # Pre-compute which positions are blocked by non-replaceable blocks (water, sand, etc.)
+        # Pre-compute which positions are blocked by non-replaceable blocks
         _REPLACEABLE_BUILD = frozenset({"AIR","CAVE_AIR","VOID_AIR","SHORT_GRASS","TALL_GRASS",
-                                        "FERN","LARGE_FERN","DEAD_BUSH","SNOW","VINE","LEAF_LITTER"})
+                                        "FERN","LARGE_FERN","DEAD_BUSH","SNOW","VINE","LEAF_LITTER",
+                                        "GRASS_BLOCK"})
         blocked_positions: set[tuple[int, int, int]] = set()
         if perception:
             for b in perception.nearby_blocks:
@@ -1141,14 +1145,15 @@ Respond ONLY with valid JSON:
         pos = perception.position
         cx, cy, cz = int(pos.get("x", 0)), int(pos.get("y", 0)), int(pos.get("z", 0))
 
-        # Don't build near water — check if any of the 3x3 footprint cells contain water
-        water_types = frozenset({"WATER", "SAND", "SEAGRASS", "TALL_SEAGRASS", "KELP", "KELP_PLANT"})
+        # Don't build near water — any water/beach block within 4 blocks horizontally
+        water_types = frozenset({"WATER", "SAND", "SEAGRASS", "TALL_SEAGRASS", "KELP", "KELP_PLANT",
+                                 "BUBBLE_COLUMN"})
         water_nearby = sum(1 for b in perception.nearby_blocks
                           if b.get("type", "").upper() in water_types
-                          and abs(b.get("x", 0) - cx) <= 2 and abs(b.get("z", 0) - cz) <= 2
-                          and abs(b.get("y", 0) - cy) <= 3)
-        if water_nearby >= 3:
-            logger.debug(f"FAST-BUILD: too much water nearby ({water_nearby} blocks), skipping build")
+                          and abs(b.get("x", 0) - cx) <= 4 and abs(b.get("z", 0) - cz) <= 4
+                          and abs(b.get("y", 0) - cy) <= 2)
+        if water_nearby >= 1:
+            logger.debug(f"FAST-BUILD: water/beach nearby ({water_nearby} blocks), skipping build")
             return None
 
         build_params = AgentAction(agent_name="", action="build",

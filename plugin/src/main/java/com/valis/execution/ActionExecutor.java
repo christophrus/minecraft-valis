@@ -183,6 +183,10 @@ public class ActionExecutor {
 
         // Make NPC face the block being mined
         var npcEntity = agent.getNpc().getEntity();
+        if (npcEntity == null) {
+            sendActionResult(agent, "mine_block", false, "NPC entity not loaded (null after teleport?)");
+            return;
+        }
         int entityId = npcEntity.getEntityId();
         var matName = blockType.name();
         Location blockCenter = new Location(world, x + 0.5, y + 0.5, z + 0.5);
