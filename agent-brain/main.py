@@ -140,6 +140,12 @@ async def main():
             await bridge.disconnect()
         except Exception:
             pass
+        # Log LLM token usage summary
+        try:
+            from llm.providers import log_session_summary
+            log_session_summary()
+        except Exception:
+            pass
         logger.info("Agent brain service stopped.")
 
 
