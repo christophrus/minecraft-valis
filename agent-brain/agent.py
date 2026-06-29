@@ -1424,17 +1424,20 @@ Respond ONLY with valid JSON:
                     logger.debug(f"LLM-PATH: unparseable/idle, trying fast-path fallback")
                     parsed = self._decision_to_action(decision, perception)
 
-            # Fast-tick with nothing to do — try exploring instead of wasting the tick
+            # Fast-tick with nothing to do — explore only if no nav is already running
             if parsed is None and is_fast_tick:
-                import random as _ft_rnd
-                _dx, _dz = _ft_rnd.choice([(1,0),(-1,0),(0,1),(0,-1)])
-                _dist = _ft_rnd.randint(20, 40)
-                _fpx = int(perception.position.get("x", 0))
-                _fpy = int(perception.position.get("y", 0))
-                _fpz = int(perception.position.get("z", 0))
-                parsed = AgentAction(agent_name="", action="move_to",
-                                     params={"x": _fpx + _dx * _dist, "y": _fpy, "z": _fpz + _dz * _dist})
-                logger.debug(f"FAST-TICK-EXPLORE: nothing actionable, exploring ({_fpx + _dx * _dist},{_fpy},{_fpz + _dz * _dist})")
+                if hasattr(self, '_nav_target') and self._nav_target:
+                    logger.debug("FAST-TICK: nav in progress, waiting (not overriding)")
+                else:
+                    import random as _ft_rnd
+                    _dx, _dz = _ft_rnd.choice([(1,0),(-1,0),(0,1),(0,-1)])
+                    _dist = _ft_rnd.randint(20, 40)
+                    _fpx = int(perception.position.get("x", 0))
+                    _fpy = int(perception.position.get("y", 0))
+                    _fpz = int(perception.position.get("z", 0))
+                    parsed = AgentAction(agent_name="", action="move_to",
+                                         params={"x": _fpx + _dx * _dist, "y": _fpy, "z": _fpz + _dz * _dist})
+                    logger.debug(f"FAST-TICK-EXPLORE: nothing actionable, exploring ({_fpx + _dx * _dist},{_fpy},{_fpz + _dz * _dist})")
 
             # Warn if agent position jumped to spawn (Citizens pathfinder bug)
             if perception and parsed and parsed.action == "move_to":
