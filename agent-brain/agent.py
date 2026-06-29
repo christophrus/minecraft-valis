@@ -127,6 +127,9 @@ class ValisAgent:
         self._action_result_ready: bool = False
         self._apm_actions: int = 0
         self._apm_start: float | None = None
+        self._tables_crafted_total: int = 0
+        self._nav_target_attempts: dict[str, int] = {}  # track attempts per nav target
+        self._blacklisted_nav_targets: set[str] = set()  # unreachable targets
 
         logger.info(f"Agent created: {self.name} ({self.personality}) [{self.agent_id}]")
 
@@ -216,7 +219,8 @@ class ValisAgent:
         has_crafting_table_inv = inv.get("crafting_table", 0) >= 1
         has_crafting_table_nearby = (
             self._crafting_table_placed or
-            any(b.get("type", "").upper() == "CRAFTING_TABLE" and abs(b.get("x",0)-px) <= 3 and abs(b.get("z",0)-pz) <= 3
+            any(b.get("type", "").upper() == "CRAFTING_TABLE"
+                and abs(b.get("x",0)-px) <= 3 and abs(b.get("y",0)-py) <= 3 and abs(b.get("z",0)-pz) <= 3
                 for b in blocks)
         )
         _REPLACEABLE = frozenset({"AIR","CAVE_AIR","VOID_AIR","SHORT_GRASS","TALL_GRASS",
@@ -243,7 +247,7 @@ class ValisAgent:
         # Reset the placed flag if we wandered far from where we put it.
         if self._crafting_table_placed and self._crafting_table_pos:
             ctx, cty, ctz = self._crafting_table_pos
-            if abs(px - ctx) + abs(py - cty) + abs(pz - ctz) > 16:
+            if abs(px - ctx) > 4 or abs(py - cty) > 3 or abs(pz - ctz) > 4:
                 self._crafting_table_placed = False
                 self._crafting_table_pos = None
         has_any_table = (inv.get("crafting_table", 0) >= 1
@@ -770,6 +774,10 @@ class ValisAgent:
                                 params={"x": int(t.get("x",px)), "y": int(t.get("y",py)), "z": int(t.get("z",pz))})
                     logger.debug(f"FAST-PATH: nav in progress, dist={dist:.1f} elapsed={elapsed:.1f}s")
                     return None  # return None → caller falls to LLM-PATH only on non-fast-ticks
+                # Arrived — clear nav target and reset attempts counter for this target
+                nav_k = f"{int(tx)},{int(ty)},{int(tz)}"
+                if nav_k in self._nav_target_attempts:
+                    del self._nav_target_attempts[nav_k]
                 self._nav_target = None
             
             # Priority 1 (MINE): Mine nearby blocks first — don't navigate to far-away intent coords
@@ -803,13 +811,24 @@ class ValisAgent:
             # Priority 2 (MOVE): Navigate toward intent coordinates (for mine/explore/move)
             if intent_coords:
                 ix, iy, iz = int(intent_coords[0][0]), int(intent_coords[0][1]), int(intent_coords[0][2])
-                dist_to_intent = math.sqrt((px-ix)**2 + (py-iy)**2 + (pz-iz)**2)
-                if dist_to_intent > 3:  # Not already there
-                    logger.debug(f"FAST-PATH: MOVE=intent -> ({ix},{iy},{iz}) dist={dist_to_intent:.0f}")
-                    self._nav_target = (ix, iy, iz)
-                    self._nav_start = time.time()
-                    return AgentAction(agent_name="", action="move_to",
-                                       params={"x": ix, "y": iy, "z": iz})
+                nav_key = f"{ix},{iy},{iz}"
+                if nav_key in self._blacklisted_nav_targets:
+                    logger.debug(f"FAST-PATH: skipping blacklisted nav target ({ix},{iy},{iz})")
+                else:
+                    dist_to_intent = math.sqrt((px-ix)**2 + (py-iy)**2 + (pz-iz)**2)
+                    if dist_to_intent > 3:
+                        self._nav_target_attempts[nav_key] = self._nav_target_attempts.get(nav_key, 0) + 1
+                        if self._nav_target_attempts[nav_key] >= 5:
+                            logger.warning(f"FAST-PATH: blacklisting nav target ({ix},{iy},{iz}) after {self._nav_target_attempts[nav_key]} failed attempts")
+                            self._blacklisted_nav_targets.add(nav_key)
+                            if len(self._blacklisted_nav_targets) > 20:
+                                self._blacklisted_nav_targets = set(list(self._blacklisted_nav_targets)[-10:])
+                        else:
+                            logger.debug(f"FAST-PATH: MOVE=intent -> ({ix},{iy},{iz}) dist={dist_to_intent:.0f} attempt={self._nav_target_attempts[nav_key]}")
+                            self._nav_target = (ix, iy, iz)
+                            self._nav_start = time.time()
+                            return AgentAction(agent_name="", action="move_to",
+                                               params={"x": ix, "y": iy, "z": iz})
             
             # Priority 3: Wood/leaves nearby while exploring → stop and mine (or navigate closer)
             wood_nearby = [b for b in blocks if b.get("type","").upper() in 
@@ -1234,7 +1253,12 @@ Respond ONLY with valid JSON:
                     offset = _rnd.randint(10, 20)
                     tp_x, tp_z = int(cpx) + dx * offset, int(cpz) + dz * offset
                     safe_y = 70
-                    logger.warning(f"NAV-STALL-ESCAPE: teleporting from ({cpx:.0f},{cpy:.0f},{cpz:.0f}) to ({tp_x},{safe_y},{tp_z})")
+                    # Blacklist the unreachable target and force a fresh LLM decision
+                    stall_target = lmi['target']
+                    stall_key = f"{int(stall_target[0])},{int(stall_target[1])},{int(stall_target[2])}"
+                    self._blacklisted_nav_targets.add(stall_key)
+                    self._cached_decision = None  # force fresh LLM call
+                    logger.warning(f"NAV-STALL-ESCAPE: teleporting from ({cpx:.0f},{cpy:.0f},{cpz:.0f}) to ({tp_x},{safe_y},{tp_z}), blacklisted {stall_key}")
                     self._last_move_info = {}
                     self._nav_target = None
                     if hasattr(self, '_stuck_positions'):
@@ -1375,15 +1399,37 @@ Respond ONLY with valid JSON:
                     else:
                         parsed = None
 
+                # Block excessive crafting_table crafting from LLM
+                if parsed and parsed.action == "craft" and parsed.params.get("item") == "crafting_table":
+                    if self._tables_crafted_total >= 2:
+                        logger.debug(f"LLM-PATH: blocking crafting_table (already crafted {self._tables_crafted_total})")
+                        parsed = None
+                    else:
+                        self._tables_crafted_total += 1
+
+                # Block LLM move_to to blacklisted nav targets
+                if parsed and parsed.action == "move_to":
+                    mk = f"{int(parsed.params.get('x',0))},{int(parsed.params.get('y',0))},{int(parsed.params.get('z',0))}"
+                    if mk in self._blacklisted_nav_targets:
+                        logger.debug(f"LLM-PATH: blocking move_to blacklisted target {mk}")
+                        parsed = None
+
                 # If LLM returned unparseable, fall back to fast-path heuristics
                 if parsed is None or parsed.action == "idle":
                     logger.debug(f"LLM-PATH: unparseable/idle, trying fast-path fallback")
                     parsed = self._decision_to_action(decision, perception)
 
-            # Fast-tick with nothing to do — skip the tick entirely (no idle action wasted)
+            # Fast-tick with nothing to do — try exploring instead of wasting the tick
             if parsed is None and is_fast_tick:
-                logger.debug(f"FAST-TICK-SKIP: nothing actionable, skipping tick")
-                return
+                import random as _ft_rnd
+                _dx, _dz = _ft_rnd.choice([(1,0),(-1,0),(0,1),(0,-1)])
+                _dist = _ft_rnd.randint(20, 40)
+                _fpx = int(perception.position.get("x", 0))
+                _fpy = int(perception.position.get("y", 0))
+                _fpz = int(perception.position.get("z", 0))
+                parsed = AgentAction(agent_name="", action="move_to",
+                                     params={"x": _fpx + _dx * _dist, "y": _fpy, "z": _fpz + _dz * _dist})
+                logger.debug(f"FAST-TICK-EXPLORE: nothing actionable, exploring ({_fpx + _dx * _dist},{_fpy},{_fpz + _dz * _dist})")
 
             # Warn if agent position jumped to spawn (Citizens pathfinder bug)
             if perception and parsed and parsed.action == "move_to":
