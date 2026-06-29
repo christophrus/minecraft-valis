@@ -1192,7 +1192,7 @@ Respond ONLY with valid JSON:
         """
         if not self._running:
             return
-        logger.debug(f"Tick entry {self.name} evt={self._perception_event.is_set()}")
+        # Tick entry logged only at DEBUG-FINE level (omitted to reduce log noise)
 
         # APM tracking
         import time as _t
@@ -1289,12 +1289,13 @@ Respond ONLY with valid JSON:
                 and ticks_since_ctrl < 5
                 and not perception_changed
             )
+            _ctrl_cached = False
             if is_fast_tick and self._cached_decision and ticks_since_ctrl < 15:
                 decision = self._cached_decision
-                logger.debug(f"CTRL-CACHE: fast-tick reuse (age={ticks_since_ctrl}t)")
+                _ctrl_cached = True
             elif use_cache:
                 decision = self._cached_decision
-                logger.debug(f"CTRL-CACHE: reusing (age={ticks_since_ctrl}t, no significant change)")
+                _ctrl_cached = True
             else:
                 decision = await self.controller.decide(self)
                 self._cached_decision = decision
@@ -1302,24 +1303,33 @@ Respond ONLY with valid JSON:
                 if not self._running:
                     return
 
-            # --- DEBUG: Controller output ---
+            # --- DEBUG: Controller output (compact; details only on fresh decisions) ---
             import re as _re
-            logger.debug(f"CTRL: hint={decision.action_hint} priority={decision.priority:.2f} cached={use_cache or is_fast_tick}")
             _intent_str = str(decision.intent) if not isinstance(decision.intent, str) else decision.intent
             _reason_str = str(decision.reason) if not isinstance(decision.reason, str) else decision.reason
-            logger.debug(f"CTRL: intent='{_intent_str[:200]}'")
-            logger.debug(f"CTRL: reason='{_reason_str[:200]}'")
             _ic = _re.findall(r'\((-?\d+),\s*(-?\d+),\s*(-?\d+)\)', _intent_str)
-            logger.debug(f"CTRL: intent_coords={_ic if _ic else 'NONE'}")
-            nb = perception.nearby_biomes
-            logger.debug(f"CTRL: nearby_biomes={dict(nb) if nb else 'NONE'}")
-            wood_count = sum(1 for b in perception.nearby_blocks
-                if b.get("type","").upper() in
-                ("OAK_LOG","BIRCH_LOG","SPRUCE_LOG","JUNGLE_LOG","ACACIA_LOG",
-                 "DARK_OAK_LOG","CHERRY_LOG","MANGROVE_LOG",
-                 "OAK_LEAVES","BIRCH_LEAVES","SPRUCE_LEAVES","JUNGLE_LEAVES",
-                 "ACACIA_LEAVES","DARK_OAK_LEAVES"))
-            logger.debug(f"CTRL: wood_in_perception={wood_count} total_blocks={len(perception.nearby_blocks)}")
+            if _ctrl_cached:
+                logger.debug(f"CTRL: hint={decision.action_hint} p={decision.priority:.2f} cached age={ticks_since_ctrl}t")
+            else:
+                nb = perception.nearby_biomes
+                _nb_str = dict(nb) if nb else 'NONE'
+                _nb_changed = _nb_str != getattr(self, '_last_logged_biomes', None)
+                if _nb_changed:
+                    self._last_logged_biomes = _nb_str
+                wood_count = sum(1 for b in perception.nearby_blocks
+                    if b.get("type","").upper() in
+                    ("OAK_LOG","BIRCH_LOG","SPRUCE_LOG","JUNGLE_LOG","ACACIA_LOG",
+                     "DARK_OAK_LOG","CHERRY_LOG","MANGROVE_LOG",
+                     "OAK_LEAVES","BIRCH_LEAVES","SPRUCE_LEAVES","JUNGLE_LEAVES",
+                     "ACACIA_LEAVES","DARK_OAK_LEAVES"))
+                logger.debug(
+                    f"CTRL: hint={decision.action_hint} p={decision.priority:.2f} "
+                    f"intent='{_intent_str[:120]}' coords={_ic if _ic else 'NONE'} "
+                    f"wood={wood_count}/{len(perception.nearby_blocks)}"
+                    + (f" biomes={_nb_str}" if _nb_changed else "")
+                )
+                if _reason_str:
+                    logger.debug(f"CTRL-WHY: {_reason_str[:150]}")
 
             # Step 2: Generate goals periodically (skip on fast-ticks to avoid LLM latency)
             if not is_fast_tick and self.tick_count % 100 == 0:
@@ -1601,8 +1611,7 @@ class AgentManager:
         agent = self.agents.get(perception.agent_name)
         if agent:
             agent.receive_perception(perception)
-            if perception.tick % 50 == 0:
-                logger.debug(f"Perception delivered to {perception.agent_name} (tick {perception.tick})")
+            pass  # perception delivery logged via tick INFO only
         else:
             # Don't auto-create if recently despawned (race condition)
             if perception.agent_name in self._despawned_recently:

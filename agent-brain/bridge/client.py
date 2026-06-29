@@ -123,7 +123,6 @@ class BridgeClient:
             await self._ws.send(json.dumps(data))
 
     async def send_action(self, action: AgentAction):
-        logger.info(f"Sending action: {action.agent_name} -> {action.action} {action.params}")
         await self.send(action.to_json())
 
     async def send_chat(self, chat: AgentChat):
