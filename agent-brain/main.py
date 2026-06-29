@@ -108,12 +108,9 @@ async def main():
     # Start agent tick loop FIRST (before blocking connect)
     tick_task = asyncio.create_task(manager.run_tick_loop())
 
-    # Schedule roster auto-spawn after a short delay so the bridge is connected
-    async def _delayed_roster_spawn():
-        await asyncio.sleep(3)
-        await manager.spawn_roster()
-
-    roster_task = asyncio.create_task(_delayed_roster_spawn())
+    # Roster reconciliation fires on every (re)connect — creates brain-side agents,
+    # waits for perception, only spawns NPCs that don't exist yet.
+    bridge.set_on_connected(manager.reconcile_roster)
 
     # Connect to Minecraft WebSocket (this runs the message loop)
     try:
@@ -121,7 +118,6 @@ async def main():
     except asyncio.CancelledError:
         logger.info("WebSocket connection cancelled")
         tick_task.cancel()
-        roster_task.cancel()
         return
 
     # Handle shutdown gracefully

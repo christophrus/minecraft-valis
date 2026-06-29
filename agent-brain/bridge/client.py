@@ -31,6 +31,11 @@ class BridgeClient:
         self._ws: "websockets.WebSocketClientProtocol | None" = None
         self._connected = False
         self._reconnect_task: asyncio.Task | None = None
+        self._on_connected_callback = None
+
+    def set_on_connected(self, callback):
+        """Register a callback that fires every time the bridge (re)connects."""
+        self._on_connected_callback = callback
 
     async def connect(self):
         """Connect to the Minecraft WebSocket server with auto-reconnect."""
@@ -40,6 +45,8 @@ class BridgeClient:
                 self._ws = await websockets.connect(self.uri, ping_interval=30)
                 self._connected = True
                 logger.info("Connected to Minecraft server.")
+                if self._on_connected_callback:
+                    asyncio.create_task(self._on_connected_callback())
                 await self._message_loop()
             except (ConnectionClosed, OSError) as e:
                 self._connected = False

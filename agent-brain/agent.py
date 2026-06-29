@@ -1602,11 +1602,15 @@ class AgentManager:
         """Set the WebSocket bridge for agent communication."""
         self._bridge = bridge
 
-    async def spawn_roster(self):
-        """Auto-spawn the configured village roster on startup.
+    async def reconcile_roster(self):
+        """Reconcile brain-side agents with Minecraft NPCs on every (re)connect.
 
-        Reads spawn_roster.yaml and spawns each listed agent at an offset from
-        world spawn. Idempotent: skips agents that already exist.
+        1. Create brain-side agent objects for all roster entries (no spawn msg).
+        2. Wait for perception data to arrive from existing NPCs.
+        3. Only send agent_spawn for agents that didn't receive any perception
+           (= NPC doesn't exist on the server yet).
+
+        This makes agents survive brain restarts, server restarts, and reconnects.
         """
         try:
             from config import load_roster
@@ -1618,30 +1622,36 @@ class AgentManager:
         if not roster:
             return
 
-        logger.info(f"Auto-spawning {len(roster)} agents from roster...")
+        newly_created: list[tuple[str, "RosterEntry"]] = []
         for entry in roster:
             if entry.name in self.agents:
-                logger.info(f"Roster: {entry.name} already exists, skipping")
+                logger.info(f"Roster: {entry.name} already has brain-side agent, skipping")
                 continue
             try:
-                await self.spawn_agent_at(
-                    entry.name, entry.personality,
-                    entry.offset_x, entry.offset_y, entry.offset_z,
-                )
+                await self.spawn_agent(entry.name, entry.personality, send_spawn_msg=False)
+                newly_created.append((entry.name, entry))
+                logger.info(f"Roster: created brain-side agent for {entry.name} ({entry.personality})")
             except Exception as e:
-                logger.warning(f"Roster spawn failed for {entry.name}: {e}")
+                logger.warning(f"Roster agent creation failed for {entry.name}: {e}")
 
-    async def spawn_agent_at(self, name: str, personality: str,
-                              offset_x: int, offset_y: int, offset_z: int) -> ValisAgent:
-        """Spawn an agent at an offset from world spawn."""
-        agent = await self.spawn_agent(name, personality, send_spawn_msg=False)
-        # Re-send spawn with the offset coordinates
-        if self._bridge:
-            await self._bridge.send({
-                "type": "agent_spawn", "name": name, "personality": personality,
-                "x": offset_x, "y": 64 + offset_y, "z": offset_z,
-            })
-        return agent
+        if not newly_created:
+            logger.info("Roster reconciliation: all agents already exist")
+            return
+
+        logger.info(f"Roster: waiting 8s for perception from {len(newly_created)} agent(s)...")
+        await asyncio.sleep(8)
+
+        for name, entry in newly_created:
+            agent = self.agents.get(name)
+            if agent and agent._pending_perception is not None:
+                logger.info(f"Roster: {name} received perception — NPC exists on server, no spawn needed")
+            else:
+                logger.info(f"Roster: {name} got no perception — spawning NPC on server")
+                if self._bridge:
+                    await self._bridge.send({
+                        "type": "agent_spawn", "name": name, "personality": entry.personality,
+                        "x": entry.offset_x, "y": 64 + entry.offset_y, "z": entry.offset_z,
+                    })
 
     async def spawn_agent(self, name: str, personality: str = "default",
                           send_spawn_msg: bool = True) -> ValisAgent:
