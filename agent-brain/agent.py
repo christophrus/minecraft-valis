@@ -1478,10 +1478,14 @@ Respond ONLY with valid JSON:
                 }
                 logger.debug(f"NAV-SEND: tick={self.tick_count} from=({_px:.0f},{_py:.0f},{_pz:.0f}) to=({tx:.0f},{ty:.0f},{tz:.0f}) dist={dist:.0f}m")
 
+            if parsed is None:
+                logger.debug(f"Agent {self.name} tick {self.tick_count}: no action (waiting)")
+                return
+
             logger.info(f"Agent {self.name} tick {self.tick_count}: {parsed.action} {parsed.params}")
 
             # Step 5: Execute action via bridge
-            if parsed and self.bridge:
+            if self.bridge:
                 parsed.agent_name = self.name
                 # Register expectation for action awareness
                 self.action_awareness.expect(

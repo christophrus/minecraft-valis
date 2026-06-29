@@ -181,12 +181,17 @@ public class ActionExecutor {
             }
         }
 
-        // Make NPC face the block being mined
-        var npcEntity = agent.getNpc().getEntity();
-        if (npcEntity == null) {
-            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "mine_block", false, "NPC entity not loaded (null after teleport?)");
+        // Make NPC face the block being mined — respawn if entity lost
+        var rawEntity = agent.getNpc().getEntity();
+        if (rawEntity == null && !agent.getNpc().isSpawned()) {
+            agent.getNpc().spawn(new Location(world, x, y + 1, z));
+            rawEntity = agent.getNpc().getEntity();
+        }
+        if (rawEntity == null) {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "mine_block", false, "NPC entity not loaded");
             return;
         }
+        final var npcEntity = rawEntity;
         int entityId = npcEntity.getEntityId();
         var matName = blockType.name();
         Location blockCenter = new Location(world, x + 0.5, y + 0.5, z + 0.5);
