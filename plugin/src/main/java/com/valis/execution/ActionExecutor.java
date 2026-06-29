@@ -184,7 +184,7 @@ public class ActionExecutor {
         // Make NPC face the block being mined
         var npcEntity = agent.getNpc().getEntity();
         if (npcEntity == null) {
-            sendActionResult(agent, "mine_block", false, "NPC entity not loaded (null after teleport?)");
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "mine_block", false, "NPC entity not loaded (null after teleport?)");
             return;
         }
         int entityId = npcEntity.getEntityId();
