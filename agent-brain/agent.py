@@ -963,9 +963,17 @@ class ValisAgent:
                 mat_match = re.search(r'(\w+) is not a placeable', result.details)
                 if mat_match:
                     fail_key = f"place:{mat_match.group(1)}"
-            # For mine_block failures on AIR, track the action
-            elif "cannot mine AIR" in (result.details or ""):
-                fail_key = "mine:AIR"
+            # For mine_block failures on AIR, blacklist the specific coordinates
+            elif "cannot mine" in (result.details or "") and result.action == "mine_block":
+                last = getattr(self, '_last_mine_coords', None)
+                if last:
+                    fail_key = f"mine:{last}"
+                    if not hasattr(self, '_blacklisted_mine_positions'):
+                        self._blacklisted_mine_positions: set[str] = set()
+                    self._blacklisted_mine_positions.add(last)
+                    logger.debug(f"MINE-BLACKLIST: position {last} blocked (now {len(self._blacklisted_mine_positions)} blacklisted)")
+                else:
+                    fail_key = "mine:AIR"
             self._failed_actions[fail_key] = self._failed_actions.get(fail_key, 0) + 1
             if self._failed_actions[fail_key] >= 3:
                 logger.warning(f"Agent {self.name}: action '{fail_key}' failed {self._failed_actions[fail_key]}× — blacklisted for session")
@@ -1077,7 +1085,11 @@ Respond ONLY with valid JSON:
         # Pre-compute which positions are blocked by non-replaceable blocks
         _REPLACEABLE_BUILD = frozenset({"AIR","CAVE_AIR","VOID_AIR","SHORT_GRASS","TALL_GRASS",
                                         "FERN","LARGE_FERN","DEAD_BUSH","SNOW","VINE","LEAF_LITTER",
-                                        "GRASS_BLOCK"})
+                                        "GRASS_BLOCK","DIRT",
+                                        "OAK_LEAVES","BIRCH_LEAVES","SPRUCE_LEAVES","JUNGLE_LEAVES",
+                                        "ACACIA_LEAVES","DARK_OAK_LEAVES","AZALEA_LEAVES",
+                                        "FLOWERING_AZALEA_LEAVES","CHERRY_LEAVES","MANGROVE_LEAVES",
+                                        "PALE_OAK_LEAVES"})
         blocked_positions: set[tuple[int, int, int]] = set()
         if perception:
             for b in perception.nearby_blocks:
@@ -1477,6 +1489,14 @@ Respond ONLY with valid JSON:
                     "from_pos": (_px, _py, _pz),
                 }
                 logger.debug(f"NAV-SEND: tick={self.tick_count} from=({_px:.0f},{_py:.0f},{_pz:.0f}) to=({tx:.0f},{ty:.0f},{tz:.0f}) dist={dist:.0f}m")
+
+            # Block mine_block to already-mined (AIR) positions
+            if parsed and parsed.action == "mine_block":
+                mk = f"{int(parsed.params.get('x',0))},{int(parsed.params.get('y',0))},{int(parsed.params.get('z',0))}"
+                self._last_mine_coords = mk
+                if hasattr(self, '_blacklisted_mine_positions') and mk in self._blacklisted_mine_positions:
+                    logger.debug(f"MINE-BLACKLIST: blocking mine_block at {mk} (already AIR)")
+                    parsed = None
 
             if parsed is None:
                 logger.debug(f"Agent {self.name} tick {self.tick_count}: no action (waiting)")

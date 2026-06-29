@@ -364,7 +364,10 @@ public class ActionExecutor {
                 || existing == Material.DEAD_BUSH
                 || existing == Material.SNOW
                 || existing == Material.VINE
-                || existing.name().contains("LEAF_LITTER");
+                || existing == Material.GRASS_BLOCK
+                || existing == Material.DIRT
+                || existing.name().contains("LEAF_LITTER")
+                || existing.name().contains("LEAVES");
         if (!replaceable) {
             plugin.getWsBridge().sendActionResult(agent.getAgentName(), "place_block",
                     false, "position occupied by " + existing.name());
