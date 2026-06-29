@@ -258,11 +258,12 @@ class ValisAgent:
             if plank_type not in self._recently_crafted:
                 craft_action = AgentAction(agent_name="", action="craft", params={"item": plank_type})
                 logger.debug(f"FAST-CRAFT: pre-emptive CRAFT planks ({best_log}={inv.get(best_log,0)})")
-        # Crafting table: ONLY if none exists anywhere (don't burn planks on duplicates)
-        elif not has_any_table and total_planks >= 4:
+        # Crafting table: ONLY if none exists anywhere AND we haven't crafted too many
+        elif not has_any_table and total_planks >= 4 and getattr(self, '_tables_crafted_total', 0) < 2:
             if "crafting_table" not in self._recently_crafted:
                 craft_action = AgentAction(agent_name="", action="craft", params={"item": "crafting_table"})
-                logger.debug(f"FAST-CRAFT: pre-emptive CRAFT crafting_table (planks={total_planks})")
+                self._tables_crafted_total = getattr(self, '_tables_crafted_total', 0) + 1
+                logger.debug(f"FAST-CRAFT: pre-emptive CRAFT crafting_table (planks={total_planks}, total_tables={self._tables_crafted_total})")
         # Sticks: need them for every tool; only planks required (no table). Keep >=3 for a pickaxe.
         elif total_sticks < 2 and total_planks >= 5:
             if "stick" not in self._recently_crafted:
@@ -675,20 +676,21 @@ class ValisAgent:
                             return AgentAction(agent_name="", action="mine_block",
                                                params={"x": px, "y": py-1, "z": pz})
                 # Before jumping, try to mine our way out — dig blocks around us
+                # BUT skip our own shelter blocks to avoid destroying our builds
                 if not hasattr(self, '_stuck_mine_attempts'):
                     self._stuck_mine_attempts = 0
                 self._stuck_mine_attempts += 1
-                # Mine blocks at foot level (py-1) in N/E/S/W cycle + blocks at head level (py, py+1)
                 dig_dirs = [(1,0), (0,1), (-1,0), (0,-1)]
                 dig_idx = (self._stuck_mine_attempts - 1) % 4
                 dx, dz = dig_dirs[dig_idx]
-                # Try foot level first, then head level
                 for dy in (-1, 0, 1):
                     for b in blocks:
                         if b.get("x",0)==px+dx and b.get("y",0)==py+dy and b.get("z",0)==pz+dz:
                             btype = b.get("type","").upper()
-                            if btype not in ("AIR","CAVE_AIR","VOID_AIR","BEDROCK","WATER","LAVA") \
-                               and "_LEAVES" not in btype and "_LOG" not in btype:
+                            if btype not in ("AIR","CAVE_AIR","VOID_AIR","BEDROCK","WATER","LAVA",
+                                             "CRAFTING_TABLE") \
+                               and "_LEAVES" not in btype and "_LOG" not in btype \
+                               and f"{px+dx},{py+dy},{pz+dz}" not in self._recently_placed:
                                 tkey = f"{px+dx},{py+dy},{pz+dz}"
                                 if tkey not in self._recently_mined:
                                     logger.debug(f"FAST-PATH: STUCK-DIG mining {btype} at ({px+dx},{py+dy},{pz+dz}) to escape")
@@ -743,14 +745,31 @@ class ValisAgent:
                 logger.debug(f"FAST-PATH: anti-stuck jump to ({tx},{ty},{tz}) (avoiding {len(self._stuck_position_history)} known spots)")
                 return AgentAction(agent_name="", action="move_to",
                                    params={"x": tx, "y": ty, "z": tz})
-            # Don't interrupt ongoing navigation — idle directly (skip LLM fallback)
+            # Don't interrupt ongoing navigation — re-send move_to instead of idling
+            # (idle wastes a fast-tick action slot and drops APM)
             if hasattr(self, '_nav_target') and self._nav_target:
                 tx, ty, tz = self._nav_target
                 dist = math.sqrt((px - tx)**2 + (py - ty)**2 + (pz - tz)**2)
                 elapsed = time.time() - getattr(self, '_nav_start', 0)
                 if dist > 3 and elapsed < 8:
-                    logger.debug(f"FAST-PATH: waiting for nav, dist={dist:.1f} elapsed={elapsed:.1f}s target=({tx},{ty},{tz}) pos=({px},{py},{pz})")
-                    return AgentAction(agent_name="", action="idle")
+                    # Mine any reachable wood/ore blocks while walking
+                    if hint == "mine":
+                        walk_minable = [b for b in blocks
+                                       if b.get("type","").upper() in
+                                       ("OAK_LOG","BIRCH_LOG","SPRUCE_LOG","JUNGLE_LOG","ACACIA_LOG",
+                                        "DARK_OAK_LOG","CHERRY_LOG","MANGROVE_LOG","COAL_ORE",
+                                        "IRON_ORE","COPPER_ORE")
+                                       and abs(b.get("x",0)-px) <= 3 and abs(b.get("y",0)-py) <= 3
+                                       and abs(b.get("z",0)-pz) <= 3
+                                       and pos_key(b) not in self._recently_mined]
+                        if walk_minable:
+                            t = min(walk_minable, key=lambda b: abs(b.get("x",0)-px)+abs(b.get("y",0)-py)+abs(b.get("z",0)-pz))
+                            self._recently_mined[pos_key(t)] = now
+                            logger.debug(f"FAST-PATH: mine-while-walking {t.get('type','?')} at ({t.get('x')},{t.get('y')},{t.get('z')})")
+                            return AgentAction(agent_name="", action="mine_block",
+                                params={"x": int(t.get("x",px)), "y": int(t.get("y",py)), "z": int(t.get("z",pz))})
+                    logger.debug(f"FAST-PATH: nav in progress, dist={dist:.1f} elapsed={elapsed:.1f}s")
+                    return None  # return None → caller falls to LLM-PATH only on non-fast-ticks
                 self._nav_target = None
             
             # Priority 1 (MINE): Mine nearby blocks first — don't navigate to far-away intent coords
@@ -1033,6 +1052,16 @@ Respond ONLY with valid JSON:
         if not pool:
             pool = [material]  # fall back to the requested material (queue will stop on failure)
 
+        # Pre-compute which positions are blocked by non-replaceable blocks (water, sand, etc.)
+        _REPLACEABLE_BUILD = frozenset({"AIR","CAVE_AIR","VOID_AIR","SHORT_GRASS","TALL_GRASS",
+                                        "FERN","LARGE_FERN","DEAD_BUSH","SNOW","VINE","LEAF_LITTER"})
+        blocked_positions: set[tuple[int, int, int]] = set()
+        if perception:
+            for b in perception.nearby_blocks:
+                btype = b.get("type", "").upper()
+                if btype not in _REPLACEABLE_BUILD:
+                    blocked_positions.add((b.get("x", 0), b.get("y", 0), b.get("z", 0)))
+
         # Collect the cells to fill (hollow 3x3x3 box with a doorway), then assign materials.
         cells: list[tuple[int, int, int]] = []
         if build_type in ("shelter", "hut", "house", "wall"):
@@ -1048,7 +1077,10 @@ Respond ONLY with valid JSON:
                                 continue  # hollow interior
                             if dx == 0 and dz == 1:
                                 continue  # doorway
-                        cells.append((cx + dx, cy + dy, cz + dz))
+                        pos = (cx + dx, cy + dy, cz + dz)
+                        if pos in blocked_positions:
+                            continue  # skip water, sand, solid terrain
+                        cells.append(pos)
 
         queue: list[AgentAction] = []
         for i, (bx, by, bz) in enumerate(cells):
@@ -1089,12 +1121,28 @@ Respond ONLY with valid JSON:
 
         pos = perception.position
         cx, cy, cz = int(pos.get("x", 0)), int(pos.get("y", 0)), int(pos.get("z", 0))
+
+        # Don't build near water — check if any of the 3x3 footprint cells contain water
+        water_types = frozenset({"WATER", "SAND", "SEAGRASS", "TALL_SEAGRASS", "KELP", "KELP_PLANT"})
+        water_nearby = sum(1 for b in perception.nearby_blocks
+                          if b.get("type", "").upper() in water_types
+                          and abs(b.get("x", 0) - cx) <= 2 and abs(b.get("z", 0) - cz) <= 2
+                          and abs(b.get("y", 0) - cy) <= 3)
+        if water_nearby >= 3:
+            logger.debug(f"FAST-BUILD: too much water nearby ({water_nearby} blocks), skipping build")
+            return None
+
         build_params = AgentAction(agent_name="", action="build",
                                    params={"type": "shelter", "material": material,
                                            "x": cx, "y": cy, "z": cz})
         self._build_queue = self._expand_build(build_params, perception)
         if not self._build_queue:
             return None
+        # After shelter is queued, append a move_to action to exit through the doorway
+        # so the agent doesn't get stuck inside its own build
+        self._build_queue.append(AgentAction(
+            agent_name="", action="move_to",
+            params={"x": cx, "y": cy, "z": cz + 3}))
         self._recently_built = time.time()
         logger.info(f"FAST-BUILD: starting shelter ({total_mat} total material) at ({cx},{cy},{cz})")
         return self._build_queue.pop(0)
@@ -1301,8 +1349,9 @@ Respond ONLY with valid JSON:
                     if parsed:
                         logger.debug(f"FAST-PATH: priority={decision.priority:.2f} hint={decision.action_hint} fast_tick={is_fast_tick} → {parsed.action}")
 
-            if parsed is None:
+            if parsed is None and not is_fast_tick:
                 # Primary path: LLM action decision informed by plan + retrieval
+                # Skip on fast-ticks — the LLM call takes 5-20s and defeats the purpose
                 logger.debug(f"LLM-PATH: calling planner.decide_action() (priority={decision.priority:.2f}, hint={decision.action_hint})")
                 action_str = await self.planner.decide_action(self)
                 logger.debug(f"LLM-PATH: returned '{action_str[:200]}'")
@@ -1314,8 +1363,15 @@ Respond ONLY with valid JSON:
                 if parsed and parsed.action == "build":
                     self._build_queue = self._expand_build(parsed, perception)
                     if self._build_queue:
+                        # Append exit-move so agent doesn't get stuck inside the shelter
+                        bx = int(parsed.params.get("x", 0))
+                        by = int(parsed.params.get("y", 0))
+                        bz = int(parsed.params.get("z", 0))
+                        self._build_queue.append(AgentAction(
+                            agent_name="", action="move_to",
+                            params={"x": bx, "y": by, "z": bz + 3}))
                         parsed = self._build_queue.pop(0)
-                        logger.debug(f"BUILD-QUEUE: expanded build into {len(self._build_queue)+1} blocks, starting first")
+                        logger.debug(f"BUILD-QUEUE: expanded build into {len(self._build_queue)} blocks + exit-move, starting first")
                     else:
                         parsed = None
 
@@ -1323,6 +1379,11 @@ Respond ONLY with valid JSON:
                 if parsed is None or parsed.action == "idle":
                     logger.debug(f"LLM-PATH: unparseable/idle, trying fast-path fallback")
                     parsed = self._decision_to_action(decision, perception)
+
+            # Fast-tick with nothing to do — skip the tick entirely (no idle action wasted)
+            if parsed is None and is_fast_tick:
+                logger.debug(f"FAST-TICK-SKIP: nothing actionable, skipping tick")
+                return
 
             # Warn if agent position jumped to spawn (Citizens pathfinder bug)
             if perception and parsed and parsed.action == "move_to":
