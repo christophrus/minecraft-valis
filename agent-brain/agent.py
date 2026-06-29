@@ -1066,14 +1066,6 @@ Respond ONLY with valid JSON:
         cz = int(params.get("z", 0))
         build_type = str(params.get("type", "shelter")).lower()
 
-        # Reject builds near ocean/river biomes
-        if perception and hasattr(perception, 'nearby_biomes') and perception.nearby_biomes:
-            ocean_biomes = sum(1 for b in perception.nearby_biomes.values()
-                              if b and ("ocean" in b.lower() or "river" in b.lower() or "beach" in b.lower()))
-            if ocean_biomes >= 1:
-                logger.info(f"BUILD: rejected at ({cx},{cy},{cz}) — {ocean_biomes} ocean/river biomes nearby")
-                return []
-
         # Build a material pool from inventory so the shelter draws on ALL available
         # building blocks, not a single type. The agent typically has wood spread across
         # oak/birch logs+planks; a single-material build runs out after 3-4 blocks.
@@ -1093,7 +1085,7 @@ Respond ONLY with valid JSON:
         # Pre-compute which positions are blocked by non-replaceable blocks
         _REPLACEABLE_BUILD = frozenset({"AIR","CAVE_AIR","VOID_AIR","SHORT_GRASS","TALL_GRASS",
                                         "FERN","LARGE_FERN","DEAD_BUSH","SNOW","VINE","LEAF_LITTER",
-                                        "GRASS_BLOCK","DIRT","GRAVEL",
+                                        "GRASS_BLOCK","DIRT","GRAVEL","WATER",
                                         "OAK_LEAVES","BIRCH_LEAVES","SPRUCE_LEAVES","JUNGLE_LEAVES",
                                         "ACACIA_LEAVES","DARK_OAK_LEAVES","AZALEA_LEAVES",
                                         "FLOWERING_AZALEA_LEAVES","CHERRY_LEAVES","MANGROVE_LEAVES",
