@@ -1233,8 +1233,9 @@ Respond ONLY with valid JSON:
         """
         Expand a build() action into a queue of place_block actions.
 
-        The LLM outputs: build(type=shelter, material=dirt, x=85, y=67, z=-80)
-        This generates a 3x3x3 hollow box of place_block calls around (x, y, z).
+        Uses a fallback pattern (3x3x3 hollow shelter) when no LLM blueprint
+        is available. The LLM blueprint system (_generate_blueprint) is called
+        asynchronously when enough materials exist — see _try_start_build.
         """
         params = parsed.params
         material = str(params.get("material", "dirt")).lower()
@@ -1243,23 +1244,29 @@ Respond ONLY with valid JSON:
         cz = int(params.get("z", 0))
         build_type = str(params.get("type", "shelter")).lower()
 
-        # Build a material pool from inventory so the shelter draws on ALL available
-        # building blocks, not a single type. The agent typically has wood spread across
-        # oak/birch logs+planks; a single-material build runs out after 3-4 blocks.
-        BUILD_MATERIALS = ("dirt", "cobblestone", "oak_planks", "birch_planks", "spruce_planks",
+        # Check if we have an LLM-generated blueprint ready
+        blueprint = getattr(self, '_pending_blueprint', None)
+        if blueprint:
+            self._pending_blueprint = None
+            queue = self._blueprint_to_queue(blueprint, cx, cy, cz, perception)
+            if queue:
+                logger.info(f"BUILD: LLM blueprint '{build_type}' at ({cx},{cy},{cz}) → {len(queue)} blocks")
+                return queue
+
+        # --- Fallback: simple 3x3x3 shelter ---
+        BUILD_MATERIALS = ("cobblestone", "oak_planks", "birch_planks", "spruce_planks",
                            "jungle_planks", "acacia_planks", "dark_oak_planks", "oak_log",
-                           "birch_log", "spruce_log", "jungle_log", "cobbled_deepslate", "stone")
+                           "birch_log", "spruce_log", "jungle_log", "cobbled_deepslate",
+                           "stone", "dirt")
         pool: list[str] = []
         if perception:
             inv = perception.inventory
             for m in BUILD_MATERIALS:
                 pool.extend([m] * inv.get(m, 0))
-        # Keep the requested material first so it's used preferentially.
         pool.sort(key=lambda m: 0 if m == material else 1)
         if not pool:
-            pool = [material]  # fall back to the requested material (queue will stop on failure)
+            pool = [material]
 
-        # Pre-compute which positions are blocked by non-replaceable blocks
         _REPLACEABLE_BUILD = frozenset({"AIR","CAVE_AIR","VOID_AIR","SHORT_GRASS","TALL_GRASS",
                                         "FERN","LARGE_FERN","DEAD_BUSH","SNOW","VINE","LEAF_LITTER",
                                         "GRASS_BLOCK","DIRT","GRAVEL","WATER",
@@ -1274,38 +1281,152 @@ Respond ONLY with valid JSON:
                 if btype not in _REPLACEABLE_BUILD:
                     blocked_positions.add((b.get("x", 0), b.get("y", 0), b.get("z", 0)))
 
-        # Collect the cells to fill (hollow 3x3x3 box with a doorway), then assign materials.
         cells: list[tuple[int, int, int]] = []
         if build_type in ("shelter", "hut", "house", "wall"):
-            # Floor plan (relative to center cx, cz):
-            #  W W W
-            #  W . W    (. = interior, W = wall)
-            #  W D W    (D = doorway, left open)
-            for dy in range(3):  # 3 layers: floor-walls, upper-walls, roof
+            for dy in range(3):
                 for dx in [-1, 0, 1]:
                     for dz in [-1, 0, 1]:
                         if dy < 2:
                             if dx == 0 and dz == 0:
-                                continue  # hollow interior
+                                continue
                             if dx == 0 and dz == 1:
-                                continue  # doorway
+                                continue
                         pos = (cx + dx, cy + dy, cz + dz)
                         if pos in blocked_positions:
-                            continue  # skip water, sand, solid terrain
+                            continue
                         cells.append(pos)
 
         queue: list[AgentAction] = []
         for i, (bx, by, bz) in enumerate(cells):
             if i >= len(pool):
-                break  # out of material — build what we can
+                break
             queue.append(AgentAction(
                 agent_name="",
                 action="place_block",
                 params={"block_type": pool[i], "x": bx, "y": by, "z": bz},
             ))
 
-        logger.info(f"BUILD: expanded '{build_type}' at ({cx},{cy},{cz}) into {len(queue)} "
+        logger.info(f"BUILD: fallback '{build_type}' at ({cx},{cy},{cz}) into {len(queue)} "
                     f"place_block actions ({len(cells)} cells, {len(pool)} materials available)")
+        return queue
+
+    async def _generate_blueprint(self, perception: PerceptionData) -> list[dict] | None:
+        """Ask the LLM to design a building. Returns a list of block placements.
+
+        PIANO-compliant: the LLM decides what to build, not hardcoded patterns.
+        The agent provides its inventory and location as neutral facts.
+        """
+        import json, re
+        inv = perception.inventory
+        pos = perception.position
+        px, py, pz = int(pos.get("x", 0)), int(pos.get("y", 0)), int(pos.get("z", 0))
+
+        BUILD_MATERIALS = ("cobblestone", "oak_planks", "birch_planks", "spruce_planks",
+                           "jungle_planks", "acacia_planks", "dark_oak_planks", "oak_log",
+                           "birch_log", "spruce_log", "jungle_log", "cobbled_deepslate",
+                           "stone", "dirt", "oak_fence", "oak_stairs", "oak_slab",
+                           "cobblestone_stairs", "cobblestone_slab", "glass", "torch",
+                           "oak_door", "birch_door", "spruce_door")
+        available = {m: inv.get(m, 0) for m in BUILD_MATERIALS if inv.get(m, 0) > 0}
+        total = sum(available.values())
+        if total < 8:
+            return None
+
+        mat_str = ", ".join(f"{v}x {k}" for k, v in
+                           sorted(available.items(), key=lambda x: -x[1]))
+
+        biome = perception.biome
+        council_task = getattr(self, '_council_assignment', "")
+        personality = getattr(self, 'personality', 'builder')
+
+        prompt = f"""You are a Minecraft architect. Design a small structure that can be built with the available materials.
+
+LOCATION: ({px}, {py}, {pz}), biome: {biome}
+AVAILABLE MATERIALS: {mat_str} (total: {total} blocks)
+BUILDER PERSONALITY: {personality}
+{f'TASK: {council_task}' if council_task else ''}
+
+RULES:
+- Use ONLY materials listed above — do not exceed available quantities.
+- All coordinates are RELATIVE to the build origin (0,0,0 = ground level center).
+- Y=0 is ground level, Y=1 is one block up, etc.
+- Leave a doorway (don't fully enclose — agents need to exit).
+- Build bottom-up (lowest Y first) so blocks have support.
+- Max size: 7x7 footprint, 5 blocks tall. Stay practical for the material count.
+- Prefer cobblestone for foundations, planks for walls, slabs/stairs for decoration.
+- Be creative but realistic — match the biome and personality.
+
+Output ONLY a JSON array of block placements, sorted bottom-up:
+[{{"block": "material_name", "x": 0, "y": 0, "z": 0}}, ...]"""
+
+        try:
+            response = await self.llm.chat([
+                {"role": "system", "content": "You are a Minecraft architect. Output only a JSON array."},
+                {"role": "user", "content": prompt},
+            ])
+            json_str = response.strip()
+            json_str = re.sub(r'^```(?:json)?\s*', '', json_str)
+            json_str = re.sub(r'\s*```$', '', json_str)
+            bracket_start = json_str.find('[')
+            bracket_end = json_str.rfind(']')
+            if bracket_start >= 0 and bracket_end > bracket_start:
+                json_str = json_str[bracket_start:bracket_end + 1]
+            blueprint = json.loads(json_str)
+            if not isinstance(blueprint, list) or len(blueprint) < 3:
+                logger.warning(f"BLUEPRINT: LLM returned too few blocks ({len(blueprint) if isinstance(blueprint, list) else 'not a list'})")
+                return None
+            # Validate: only use materials we actually have
+            mat_budget = dict(available)
+            validated = []
+            for entry in blueprint:
+                block = entry.get("block", "").lower()
+                if block in mat_budget and mat_budget[block] > 0:
+                    mat_budget[block] -= 1
+                    validated.append(entry)
+                else:
+                    # Substitute with most-available material
+                    sub = max(mat_budget, key=mat_budget.get) if mat_budget else None
+                    if sub and mat_budget[sub] > 0:
+                        mat_budget[sub] -= 1
+                        entry["block"] = sub
+                        validated.append(entry)
+            logger.info(f"BLUEPRINT: LLM designed {len(validated)} blocks "
+                       f"({len(blueprint)} requested, {total} available)")
+            return validated
+        except Exception as e:
+            logger.warning(f"BLUEPRINT: LLM call failed: {e}")
+            return None
+
+    def _blueprint_to_queue(self, blueprint: list[dict], cx: int, cy: int, cz: int,
+                            perception: PerceptionData | None) -> list[AgentAction]:
+        """Convert an LLM blueprint (relative coords) to absolute place_block actions."""
+        _REPLACEABLE_BUILD = frozenset({"AIR","CAVE_AIR","VOID_AIR","SHORT_GRASS","TALL_GRASS",
+                                        "FERN","LARGE_FERN","DEAD_BUSH","SNOW","VINE","LEAF_LITTER",
+                                        "GRASS_BLOCK","DIRT","GRAVEL","WATER",
+                                        "OAK_LEAVES","BIRCH_LEAVES","SPRUCE_LEAVES","JUNGLE_LEAVES",
+                                        "ACACIA_LEAVES","DARK_OAK_LEAVES","AZALEA_LEAVES",
+                                        "FLOWERING_AZALEA_LEAVES","CHERRY_LEAVES","MANGROVE_LEAVES",
+                                        "PALE_OAK_LEAVES"})
+        blocked: set[tuple[int, int, int]] = set()
+        if perception:
+            for b in perception.nearby_blocks:
+                btype = b.get("type", "").upper()
+                if btype not in _REPLACEABLE_BUILD:
+                    blocked.add((b.get("x", 0), b.get("y", 0), b.get("z", 0)))
+
+        queue: list[AgentAction] = []
+        for entry in blueprint:
+            bx = cx + int(entry.get("x", 0))
+            by = cy + int(entry.get("y", 0))
+            bz = cz + int(entry.get("z", 0))
+            if (bx, by, bz) in blocked:
+                continue
+            block = entry.get("block", "dirt").lower()
+            queue.append(AgentAction(
+                agent_name="",
+                action="place_block",
+                params={"block_type": block, "x": bx, "y": by, "z": bz},
+            ))
         return queue
 
     def _try_start_build(self, decision, perception: PerceptionData) -> AgentAction | None:
@@ -1351,14 +1472,49 @@ Respond ONLY with valid JSON:
             logger.debug(f"FAST-BUILD: water/beach nearby ({water_nearby} blocks), skipping build")
             return None
 
+        # If we have a pending LLM blueprint, use it
+        blueprint = getattr(self, '_pending_blueprint', None)
+        if blueprint:
+            self._pending_blueprint = None
+            queue = self._blueprint_to_queue(blueprint, cx, cy, cz, perception)
+            if queue:
+                self._build_queue = queue
+                self._build_queue.append(AgentAction(
+                    agent_name="", action="move_to",
+                    params={"x": cx, "y": cy, "z": cz + 4}))
+                if not hasattr(self, '_recent_build_sites'):
+                    self._recent_build_sites = {}
+                self._recent_build_sites[(cx, cy, cz)] = time.time()
+                self._pending_shelter_pos = (cx, cy, cz)
+                logger.info(f"FAST-BUILD: LLM blueprint ({len(queue)} blocks) at ({cx},{cy},{cz})")
+                return self._build_queue.pop(0)
+
+        # Request a blueprint from the LLM (will be used on the NEXT build attempt)
+        if not getattr(self, '_blueprint_requested', False) and total_mat >= 15:
+            self._blueprint_requested = True
+            import asyncio
+            async def _fetch():
+                try:
+                    bp = await self._generate_blueprint(perception)
+                    if bp:
+                        self._pending_blueprint = bp
+                        self._cached_decision = None  # trigger fresh build attempt
+                        logger.info(f"BLUEPRINT: ready — {len(bp)} blocks designed")
+                except Exception as e:
+                    logger.warning(f"BLUEPRINT: generation failed: {e}")
+                finally:
+                    self._blueprint_requested = False
+            asyncio.create_task(_fetch())
+            logger.info(f"BLUEPRINT: requesting LLM design ({total_mat} materials available)")
+            return None  # wait for blueprint to arrive
+
+        # Fallback: use hardcoded 3x3 shelter
         build_params = AgentAction(agent_name="", action="build",
                                    params={"type": "shelter", "material": material,
                                            "x": cx, "y": cy, "z": cz})
         self._build_queue = self._expand_build(build_params, perception)
         if not self._build_queue:
             return None
-        # After shelter is queued, append a move_to action to exit through the doorway
-        # so the agent doesn't get stuck inside its own build
         self._build_queue.append(AgentAction(
             agent_name="", action="move_to",
             params={"x": cx, "y": cy, "z": cz + 3}))
@@ -1366,7 +1522,7 @@ Respond ONLY with valid JSON:
             self._recent_build_sites = {}
         self._recent_build_sites[(cx, cy, cz)] = time.time()
         self._pending_shelter_pos = (cx, cy, cz)
-        logger.info(f"FAST-BUILD: starting shelter ({total_mat} total material) at ({cx},{cy},{cz})")
+        logger.info(f"FAST-BUILD: fallback shelter ({total_mat} total material) at ({cx},{cy},{cz})")
         return self._build_queue.pop(0)
 
     def _perception_changed_significantly(self, perception: PerceptionData) -> bool:
