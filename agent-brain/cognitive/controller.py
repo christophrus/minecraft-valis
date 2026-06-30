@@ -144,7 +144,7 @@ class CognitiveController:
                 )
                 _is_day = perception.is_day
             settlement_block = settlement.get_context_for_prompt(
-                agent_pos=_agent_pos, is_day=_is_day
+                agent_name=agent.name, agent_pos=_agent_pos, is_day=_is_day
             )
 
         # Nearby agents — who else is around
@@ -191,12 +191,15 @@ RELEVANT MEMORIES (weighted by importance+recency+relevance):
 {reflection_text}
 {discrepancy_text}
 
-action_hint choices: mine|craft|place|build|move|explore|hunt|socialize|rest
+action_hint choices: mine|craft|place|build|move|explore|hunt|socialize|give|rest
 
 To craft: use action_hint "craft" and specify the item name in intent. Only craft items listed in CAN CRAFT NOW.
 To get missing materials: mine or gather what ALMOST CRAFTABLE shows.
 To build a shelter: use action_hint "build". The agent will construct a 3x3 shelter automatically.
+To give items to another agent: use action_hint "give" and specify "give [item] to [AgentName]" in intent. You must be near the target agent.
 chat_hint: optional short message spoken aloud in Minecraft chat. Other agents and players can hear it. Use it to coordinate, share info, or respond to what you heard. Leave empty if nothing to say.
+
+COOPERATION: Check VILLAGE MEMBERS STATUS. If another agent needs resources you have surplus of, consider giving them. If you need something, ask via chat_hint. Specialization makes the village stronger.
 
 Output ONLY JSON:
 {{"intent": "what and where", "reason": "why (1 sentence)", "priority": 0-10, "action_hint": "mine|craft|...", "chat_hint": ""}}"""

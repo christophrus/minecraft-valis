@@ -51,6 +51,7 @@ public class ActionExecutor {
                 case "look_at" -> lookAt(params);
                 case "chat" -> chat(params);
                 case "teleport" -> teleport(params);
+                case "give_item" -> giveItem(params);
                 case "idle" -> idle();
                 default -> {
                     log.warning("Unknown action for " + agent.getAgentName() + ": " + action);
@@ -594,6 +595,51 @@ public class ActionExecutor {
         }
         plugin.getWsBridge().sendActionResult(agent.getAgentName(), "teleport",
                 true, "teleported to " + x + "," + safeY + "," + z);
+    }
+
+    /**
+     * Transfer items directly to another agent's inventory.
+     */
+    private void giveItem(JsonObject params) {
+        String targetName = params.has("target") ? params.get("target").getAsString() : "";
+        String itemName = params.has("item") ? params.get("item").getAsString().toLowerCase() : "";
+        int amount = params.has("amount") ? params.get("amount").getAsInt() : 1;
+
+        if (targetName.isEmpty() || itemName.isEmpty()) {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "give_item",
+                    false, "missing target or item param");
+            return;
+        }
+
+        VirtualAgent target = plugin.getAgents().get(targetName);
+        if (target == null) {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "give_item",
+                    false, "agent not found: " + targetName);
+            return;
+        }
+
+        // Check distance — must be within 6 blocks
+        double dist = agent.getLocation().distance(target.getLocation());
+        if (dist > 6) {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "give_item",
+                    false, "too far from " + targetName + " (" + String.format("%.0f", dist) + "m)");
+            return;
+        }
+
+        if (!agent.hasInInventory(itemName, amount)) {
+            int has = agent.getInventory().getOrDefault(itemName, 0);
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "give_item",
+                    false, "only have " + has + "x " + itemName);
+            return;
+        }
+
+        agent.removeFromInventory(itemName, amount);
+        Material mat = Material.matchMaterial(itemName.toUpperCase());
+        if (mat != null) {
+            target.addToInventory(mat, amount);
+        }
+        plugin.getWsBridge().sendActionResult(agent.getAgentName(), "give_item",
+                true, "gave " + amount + "x " + itemName + " to " + targetName);
     }
 
     /**

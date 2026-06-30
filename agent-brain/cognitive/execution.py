@@ -110,6 +110,9 @@ class Executor:
                     params = {"message": params_str}
                 elif action_name in ("craft",):
                     params = {"item": parts[0].strip()}
+                elif action_name in ("give_item", "give") and len(parts) >= 3:
+                    params = {"target": parts[0].strip(), "item": parts[1].strip(),
+                              "amount": _parse_num(parts[2]) if len(parts) > 2 else 1}
 
         # Map action names to Minecraft actions
         action_map = {
@@ -136,6 +139,8 @@ class Executor:
             "wait": "idle",
             "do_nothing": "idle",
             "craft": "craft",
+            "give_item": "give_item",
+            "give": "give_item",
         }
 
         mapped_action = action_map.get(action_name)

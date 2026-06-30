@@ -940,6 +940,32 @@ class ValisAgent:
             return AgentAction(agent_name="", action="move_to",
                                params={"x": tx, "y": ty, "z": tz})
 
+        if hint == "give":
+            # Parse "give cobblestone to BuilderAlice" from intent
+            give_match = re.search(r'give\s+(\w+)\s+to\s+(\w+)', intent, re.IGNORECASE)
+            if give_match:
+                item = give_match.group(1).lower()
+                target = give_match.group(2)
+                inv = perception.inventory
+                amount = min(inv.get(item, 0), 10)
+                if amount > 0:
+                    # Check if target agent is nearby
+                    nearby_agent = None
+                    for e in perception.nearby_entities:
+                        if e.get("name", "") == target and e.get("distance", 999) < 5:
+                            nearby_agent = e
+                            break
+                    if nearby_agent:
+                        return AgentAction(agent_name="", action="give_item",
+                            params={"target": target, "item": item, "amount": amount})
+                    elif any(e.get("name","") == target for e in perception.nearby_entities):
+                        # Target exists but too far — move closer
+                        for e in perception.nearby_entities:
+                            if e.get("name","") == target:
+                                return AgentAction(agent_name="", action="move_to",
+                                    params={"x": int(e.get("x",px)), "y": int(e.get("y",py)),
+                                            "z": int(e.get("z",pz))})
+
         if hint in ("rest", "idle"):
             return AgentAction(agent_name="", action="idle")
 
@@ -1634,6 +1660,45 @@ Respond ONLY with valid JSON:
             elif not parsed:
                 logger.warning(f"Agent {self.name}: could not parse action: '{action_str}'")
 
+            # Step 5b: Social awareness — process heard chat messages
+            if not is_fast_tick and perception.nearby_chat:
+                import re as _re_chat
+                for msg in perception.nearby_chat:
+                    _chat_match = _re_chat.match(r'\[(\w+)\]\s*(.*)', msg)
+                    if _chat_match:
+                        _sender = _chat_match.group(1)
+                        if _sender != self.name:
+                            self.social_awareness.update_relationship(
+                                target=_sender, sentiment_delta=0.1, trust_delta=0.05)
+                            if not hasattr(self, '_unanalyzed_chat'):
+                                self._unanalyzed_chat: dict[str, list[str]] = {}
+                            self._unanalyzed_chat.setdefault(_sender, []).append(
+                                _chat_match.group(2))
+
+                # Deep LLM analysis every 30 ticks if unanalyzed messages exist
+                if (self.tick_count % 30 == 0
+                        and hasattr(self, '_unanalyzed_chat')
+                        and self._unanalyzed_chat):
+                    for _sa_sender, _sa_msgs in list(self._unanalyzed_chat.items()):
+                        if _sa_msgs:
+                            _sa_convo = "\n".join(
+                                f"{_sa_sender}: {m}" for m in _sa_msgs[-5:])
+                            await self.social_awareness.analyze_interaction(
+                                self, _sa_sender, _sa_convo)
+                    self._unanalyzed_chat.clear()
+                    logger.debug(f"SOCIAL: analyzed chat interactions for {self.name}")
+
+            # Step 5c: Report status to settlement so other agents see it
+            if self.settlement and not is_fast_tick and self.tick_count % 5 == 0:
+                _pos = perception.position
+                self.settlement.update_agent_status(
+                    name=self.name,
+                    personality=self.personality,
+                    intent=decision.intent,
+                    inventory=perception.inventory,
+                    position=(int(_pos.get("x",0)), int(_pos.get("y",0)), int(_pos.get("z",0))),
+                )
+
             # Step 6: Accumulate importance for reflection
             importance = decision.priority * 5  # Scale to roughly match threshold
             self.reflection.accumulate_importance(importance)
@@ -1674,6 +1739,7 @@ class Settlement:
         self.shelters_built: int = 0
         self.shelter_positions: list[tuple[int, int, int]] = []
         self.crafting_tables: list[tuple[int, int, int]] = []
+        self.agent_status: dict[str, dict] = {}
 
     def register_shelter(self, x: int, y: int, z: int) -> bool:
         """Register a shelter. Returns False if a shelter already exists within 8 blocks."""
@@ -1696,7 +1762,22 @@ class Settlement:
             self.crafting_tables.append(pos)
             logger.info(f"SETTLEMENT: crafting table registered at ({x},{y},{z})")
 
-    def get_context_for_prompt(self, agent_pos: tuple[int,int,int] | None = None,
+    def update_agent_status(self, name: str, personality: str, intent: str,
+                            inventory: dict[str, int],
+                            position: tuple[int, int, int]):
+        """Update an agent's shared status so other agents can see it."""
+        import time
+        surplus = [(k, v) for k, v in sorted(inventory.items(), key=lambda x: -x[1]) if v >= 5][:5]
+        self.agent_status[name] = {
+            "personality": personality,
+            "intent": intent[:60],
+            "surplus": surplus,
+            "position": position,
+            "updated": time.time(),
+        }
+
+    def get_context_for_prompt(self, agent_name: str | None = None,
+                               agent_pos: tuple[int,int,int] | None = None,
                                is_day: bool | None = None) -> str:
         if self.center is None:
             return ""
@@ -1716,6 +1797,24 @@ class Settlement:
                 lines.append(f"Your distance to settlement: {dist:.0f} blocks.")
         if is_day is not None:
             lines.append(f"Time of day: {'day' if is_day else 'night (hostile mobs spawn)'}.")
+
+        import time as _time
+        others = {n: s for n, s in self.agent_status.items()
+                  if n != agent_name and _time.time() - s.get("updated", 0) < 120}
+        if others:
+            lines.append("VILLAGE MEMBERS STATUS:")
+            for n, s in others.items():
+                role = s["personality"]
+                intent = s["intent"]
+                surplus_str = ", ".join(f"{v}x {k}" for k, v in s["surplus"][:3]) if s["surplus"] else "nothing notable"
+                ox, oy, oz = s["position"]
+                if agent_pos:
+                    import math as _m2
+                    d = _m2.sqrt((agent_pos[0]-ox)**2 + (agent_pos[2]-oz)**2)
+                    lines.append(f"  {n} ({role}, {d:.0f}m away): \"{intent}\" | has: {surplus_str}")
+                else:
+                    lines.append(f"  {n} ({role}): \"{intent}\" | has: {surplus_str}")
+
         return "\n".join(lines)
 
 
