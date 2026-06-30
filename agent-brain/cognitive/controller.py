@@ -130,9 +130,30 @@ class CognitiveController:
                 f"Bias decisions toward your role. Only deviate when survival demands it.\n"
             )
 
+        # Settlement context — shared village state
+        settlement_block = ""
+        settlement = getattr(agent, 'settlement', None)
+        if settlement:
+            settlement_block = settlement.get_context_for_prompt()
+
+        # Nearby agents — who else is around
+        nearby_agents_block = ""
+        if perception and perception.nearby_entities:
+            agent_entities = [
+                e for e in perception.nearby_entities
+                if e.get("type", "").upper() in ("PLAYER", "NPC", "CITIZEN")
+                and e.get("name", "") != agent.name
+                and not e.get("is_player", False)
+            ]
+            if agent_entities:
+                descs = [f"{e.get('name','?')} ({e.get('distance',0):.0f}m away)" for e in agent_entities[:5]]
+                nearby_agents_block = "VILLAGE MEMBERS NEARBY: " + ", ".join(descs)
+
         prompt = f"""You control {agent.name}, an AI in Minecraft. Pick ONE action. Be concise — output ONLY JSON, max 300 chars.
 
 {personality_block}
+{settlement_block}
+{nearby_agents_block}
 INVENTORY: {inv_text}
 
 PERCEPTION:

@@ -133,6 +133,7 @@ class ValisAgent:
         self._tables_crafted_total: int = 0
         self._nav_target_attempts: dict[str, int] = {}  # track attempts per nav target
         self._blacklisted_nav_targets: set[str] = set()  # unreachable targets
+        self.settlement: "Settlement | None" = None  # set by AgentManager after creation
 
         logger.info(f"Agent created: {self.name} ({self.personality}) [{self.agent_id}]")
 
@@ -231,8 +232,14 @@ class ValisAgent:
         # Tools (pickaxe/axe) need a crafting table nearby — place it FIRST if we have one
         # but none is nearby, so the subsequent craft doesn't fail with "need crafting_table".
         has_crafting_table_inv = inv.get("crafting_table", 0) >= 1
+        _settlement_table_nearby = False
+        if self.settlement:
+            for stx, sty, stz in self.settlement.crafting_tables:
+                if abs(px - stx) <= 4 and abs(py - sty) <= 3 and abs(pz - stz) <= 4:
+                    _settlement_table_nearby = True
+                    break
         has_crafting_table_nearby = (
-            self._crafting_table_placed or
+            self._crafting_table_placed or _settlement_table_nearby or
             any(b.get("type", "").upper() == "CRAFTING_TABLE"
                 and abs(b.get("x",0)-px) <= 3 and abs(b.get("y",0)-py) <= 3 and abs(b.get("z",0)-pz) <= 3
                 for b in blocks)
@@ -254,6 +261,8 @@ class ValisAgent:
                 logger.debug(f"FAST-CRAFT: placing crafting_table at ({tx},{ty},{tz}) before crafting tool")
                 self._crafting_table_placed = True
                 self._crafting_table_pos = (tx, ty, tz)
+                if self.settlement:
+                    self.settlement.register_crafting_table(tx, ty, tz)
                 return AgentAction(agent_name="", action="place_block",
                                    params={"block_type": "crafting_table", "x": tx, "y": ty, "z": tz})
 
@@ -1164,6 +1173,10 @@ Respond ONLY with valid JSON:
                 self._last_build_mat_log = total_mat
                 logger.debug(f"FAST-BUILD: not enough material (total={total_mat}, best={material}:{inv.get(material,0)}), deferring")
             return None
+        # Don't build another shelter if the settlement already has one — go to the existing one instead
+        if self.settlement and self.settlement.shelters_built >= 1:
+            logger.debug(f"FAST-BUILD: settlement already has {self.settlement.shelters_built} shelter(s), skipping")
+            return None
         if getattr(self, '_recently_built', 0) and time.time() - self._recently_built < 120:
             return None
 
@@ -1193,6 +1206,8 @@ Respond ONLY with valid JSON:
             agent_name="", action="move_to",
             params={"x": cx, "y": cy, "z": cz + 3}))
         self._recently_built = time.time()
+        if self.settlement:
+            self.settlement.register_shelter(cx, cy, cz)
         logger.info(f"FAST-BUILD: starting shelter ({total_mat} total material) at ({cx},{cy},{cz})")
         return self._build_queue.pop(0)
 
@@ -1356,6 +1371,31 @@ Respond ONLY with valid JSON:
                 if _reason_str:
                     logger.debug(f"CTRL-WHY: {_reason_str[:150]}")
 
+            # Night return: if it's night and we have a settlement, go home
+            if (perception and not perception.is_day
+                    and self.settlement and self.settlement.center
+                    and not self._build_queue):
+                cx, cy, cz = self.settlement.center
+                px = int(perception.position.get("x", 0))
+                py = int(perception.position.get("y", 0))
+                pz = int(perception.position.get("z", 0))
+                import math as _nm
+                dist_to_home = _nm.sqrt((px - cx)**2 + (pz - cz)**2)
+                if dist_to_home > 20 and not getattr(self, '_returning_home', False):
+                    self._returning_home = True
+                    logger.info(f"NIGHT-RETURN: {self.name} heading home to ({cx},{cy},{cz}), dist={dist_to_home:.0f}m")
+                    parsed = AgentAction(agent_name=self.name, action="move_to",
+                                         params={"x": cx, "y": cy, "z": cz})
+                    # Skip rest of tick, just go home
+                    if self.bridge:
+                        await self.bridge.send_action(parsed)
+                    self._apm_actions += 1
+                    return
+                elif dist_to_home <= 20:
+                    self._returning_home = False
+            elif perception and perception.is_day:
+                self._returning_home = False
+
             # Step 2: Generate goals periodically (skip on fast-ticks to avoid LLM latency)
             if not is_fast_tick and self.tick_count % 100 == 0:
                 await self.goal_generator.generate_goals(
@@ -1425,19 +1465,25 @@ Respond ONLY with valid JSON:
 
                 # Handle build() action — LLM returns a multi-block placement plan
                 if parsed and parsed.action == "build":
-                    self._build_queue = self._expand_build(parsed, perception)
-                    if self._build_queue:
-                        # Append exit-move so agent doesn't get stuck inside the shelter
-                        bx = int(parsed.params.get("x", 0))
-                        by = int(parsed.params.get("y", 0))
-                        bz = int(parsed.params.get("z", 0))
-                        self._build_queue.append(AgentAction(
-                            agent_name="", action="move_to",
-                            params={"x": bx, "y": by, "z": bz + 3}))
-                        parsed = self._build_queue.pop(0)
-                        logger.debug(f"BUILD-QUEUE: expanded build into {len(self._build_queue)} blocks + exit-move, starting first")
-                    else:
+                    # Don't build if settlement already has a shelter
+                    if self.settlement and self.settlement.shelters_built >= 1:
+                        logger.debug(f"LLM-PATH: blocking build — settlement already has shelter")
                         parsed = None
+                    else:
+                        self._build_queue = self._expand_build(parsed, perception)
+                        if self._build_queue:
+                            bx = int(parsed.params.get("x", 0))
+                            by = int(parsed.params.get("y", 0))
+                            bz = int(parsed.params.get("z", 0))
+                            self._build_queue.append(AgentAction(
+                                agent_name="", action="move_to",
+                                params={"x": bx, "y": by, "z": bz + 3}))
+                            if self.settlement:
+                                self.settlement.register_shelter(bx, by, bz)
+                            parsed = self._build_queue.pop(0)
+                            logger.debug(f"BUILD-QUEUE: expanded build into {len(self._build_queue)} blocks + exit-move, starting first")
+                        else:
+                            parsed = None
 
                 # Block excessive crafting_table crafting from LLM
                 if parsed and parsed.action == "craft" and parsed.params.get("item") == "crafting_table":
@@ -1453,6 +1499,26 @@ Respond ONLY with valid JSON:
                     if mk in self._blacklisted_nav_targets:
                         logger.debug(f"LLM-PATH: blocking move_to blacklisted target {mk}")
                         parsed = None
+
+                # Block backwards-pendling: if the LLM sends us to coords we already
+                # visited recently (within last 3 positions), skip and let fast-path explore
+                if parsed and parsed.action == "move_to" and perception:
+                    tx = int(parsed.params.get('x', 0))
+                    tz = int(parsed.params.get('z', 0))
+                    _ppx = int(perception.position.get('x', 0))
+                    _ppz = int(perception.position.get('z', 0))
+                    if not hasattr(self, '_recent_move_targets'):
+                        self._recent_move_targets: list[tuple[int, int]] = []
+                    # Check if target is within 10 blocks of a recently visited position
+                    for rx, rz in self._recent_move_targets[-5:]:
+                        if abs(tx - rx) <= 10 and abs(tz - rz) <= 10 and abs(tx - _ppx) + abs(tz - _ppz) > 15:
+                            logger.debug(f"LLM-PATH: blocking backwards move to ({tx},_,{tz}) — recently visited ({rx},_,{rz})")
+                            parsed = None
+                            break
+                    if parsed and parsed.action == "move_to":
+                        self._recent_move_targets.append((_ppx, _ppz))
+                        if len(self._recent_move_targets) > 10:
+                            self._recent_move_targets = self._recent_move_targets[-10:]
 
                 # If LLM returned unparseable, fall back to fast-path heuristics
                 if parsed is None or parsed.action == "idle":
@@ -1587,6 +1653,39 @@ Respond ONLY with valid JSON:
             logger.error(f"Agent {self.name} cognitive tick error: {e}", exc_info=True)
 
 
+class Settlement:
+    """Shared settlement state across all agents in the village."""
+
+    def __init__(self):
+        self.center: tuple[int, int, int] | None = None
+        self.shelters_built: int = 0
+        self.crafting_tables: list[tuple[int, int, int]] = []
+
+    def register_shelter(self, x: int, y: int, z: int):
+        if self.center is None:
+            self.center = (x, y, z)
+            logger.info(f"SETTLEMENT: center established at ({x},{y},{z})")
+        self.shelters_built += 1
+        logger.info(f"SETTLEMENT: shelter #{self.shelters_built} at ({x},{y},{z})")
+
+    def register_crafting_table(self, x: int, y: int, z: int):
+        pos = (x, y, z)
+        if pos not in self.crafting_tables:
+            self.crafting_tables.append(pos)
+            logger.info(f"SETTLEMENT: crafting table registered at ({x},{y},{z})")
+
+    def get_context_for_prompt(self) -> str:
+        if self.center is None:
+            return ""
+        cx, cy, cz = self.center
+        lines = [f"SETTLEMENT CENTER: ({cx},{cy},{cz}) — {self.shelters_built} shelter(s) built."]
+        if self.crafting_tables:
+            tbl_strs = [f"({x},{y},{z})" for x, y, z in self.crafting_tables[:3]]
+            lines.append(f"Shared crafting tables: {', '.join(tbl_strs)}")
+        lines.append("Stay near the settlement. Build and gather resources close to the center.")
+        return "\n".join(lines)
+
+
 class AgentManager:
     """
     Manages all AI agents in the simulation.
@@ -1597,6 +1696,7 @@ class AgentManager:
         self.agents: dict[str, ValisAgent] = {}
         self._bridge = None
         self._despawned_recently: set[str] = set()  # Prevent auto-recreate race
+        self.settlement = Settlement()
 
     def set_bridge(self, bridge):
         """Set the WebSocket bridge for agent communication."""
@@ -1683,6 +1783,7 @@ class AgentManager:
             focus=focus,
         )
         agent = ValisAgent(config, bridge=self._bridge)
+        agent.settlement = self.settlement
         self.agents[name] = agent
         await agent.start()
 
