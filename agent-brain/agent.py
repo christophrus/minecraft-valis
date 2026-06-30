@@ -973,6 +973,14 @@ class ValisAgent:
 
     def receive_perception(self, perception: PerceptionData):
         """Called when new perception data arrives from Minecraft."""
+        # Accumulate nearby_chat across overwrites so messages aren't lost
+        # when Java sends multiple perceptions during a long LLM call
+        old = self._pending_perception
+        if old and old.nearby_chat:
+            if perception.nearby_chat:
+                perception.nearby_chat = old.nearby_chat + perception.nearby_chat
+            else:
+                perception.nearby_chat = list(old.nearby_chat)
         self.perception_processor.update(perception)
         self._pending_perception = perception
         self._perception_event.set()
@@ -1663,6 +1671,7 @@ Respond ONLY with valid JSON:
             # Step 5b: Social awareness — process heard chat messages
             if not is_fast_tick and perception.nearby_chat:
                 import re as _re_chat
+                _chat_count = len(perception.nearby_chat)
                 for msg in perception.nearby_chat:
                     _chat_match = _re_chat.match(r'\[(\w+)\]\s*(.*)', msg)
                     if _chat_match:
@@ -1674,6 +1683,8 @@ Respond ONLY with valid JSON:
                                 self._unanalyzed_chat: dict[str, list[str]] = {}
                             self._unanalyzed_chat.setdefault(_sender, []).append(
                                 _chat_match.group(2))
+                logger.debug(f"SOCIAL: {self.name} processed {_chat_count} chat message(s)")
+                perception.nearby_chat = []
 
                 # Deep LLM analysis every 30 ticks if unanalyzed messages exist
                 if (self.tick_count % 30 == 0
@@ -1783,6 +1794,8 @@ class Settlement:
             return ""
         cx, cy, cz = self.center
         lines = [f"SETTLEMENT: center ({cx},{cy},{cz}), {self.shelters_built} shelter(s) built."]
+        if self.shelters_built == 0:
+            lines.append("No shelters yet. Building near the settlement center benefits the whole village.")
         if self.crafting_tables:
             tbl_strs = [f"({x},{y},{z})" for x, y, z in self.crafting_tables[:3]]
             lines.append(f"Shared crafting tables: {', '.join(tbl_strs)}")
@@ -1790,9 +1803,11 @@ class Settlement:
             import math as _m
             dist = _m.sqrt((agent_pos[0] - cx)**2 + (agent_pos[2] - cz)**2)
             if dist > 150:
-                lines.append(f"Your distance to settlement: {dist:.0f} blocks (very far — other agents cannot see or hear you).")
+                lines.append(f"Your distance to settlement: {dist:.0f} blocks (very far — other agents cannot see, hear, or trade with you).")
             elif dist > 80:
-                lines.append(f"Your distance to settlement: {dist:.0f} blocks (far from group).")
+                lines.append(f"Your distance to settlement: {dist:.0f} blocks (far — cooperation and trading not possible at this range).")
+            elif dist > 40:
+                lines.append(f"Your distance to settlement: {dist:.0f} blocks (moderate — at edge of cooperation range).")
             else:
                 lines.append(f"Your distance to settlement: {dist:.0f} blocks.")
         if is_day is not None:
@@ -1869,6 +1884,16 @@ class AgentManager:
         if not newly_created:
             logger.info("Roster reconciliation: all agents already exist")
             return
+
+        # Initialize settlement center from spawn positions so agents get
+        # distance context from tick 1 (before any shelter is built)
+        if self.settlement.center is None and newly_created:
+            xs = [e.offset_x for _, e in newly_created]
+            zs = [e.offset_z for _, e in newly_created]
+            cx = sum(xs) // len(xs)
+            cz = sum(zs) // len(zs)
+            self.settlement.center = (cx, 64, cz)
+            logger.info(f"SETTLEMENT: initial center from spawn positions: ({cx},64,{cz})")
 
         logger.info(f"Roster: waiting 8s for perception from {len(newly_created)} agent(s)...")
         await asyncio.sleep(8)
