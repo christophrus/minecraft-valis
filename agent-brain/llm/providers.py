@@ -23,7 +23,8 @@ _llm_call_logger = logging.getLogger("valis.llm.calls")
 _llm_call_logger.propagate = False  # don't duplicate to main debug log
 _llm_log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "debug_logs")
 os.makedirs(_llm_log_dir, exist_ok=True)
-_llm_log_path = os.path.join(_llm_log_dir, "llm_calls.log")
+from datetime import datetime as _dt
+_llm_log_path = os.path.join(_llm_log_dir, f"llm_calls-{_dt.now().strftime('%Y%m%d-%H%M%S')}.log")
 _llm_fh = logging.FileHandler(_llm_log_path, encoding="utf-8")
 _llm_fh.setFormatter(logging.Formatter("%(message)s"))
 _llm_call_logger.addHandler(_llm_fh)
