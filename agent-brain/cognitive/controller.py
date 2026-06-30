@@ -130,11 +130,22 @@ class CognitiveController:
                 f"Bias decisions toward your role. Only deviate when survival demands it.\n"
             )
 
-        # Settlement context — shared village state
+        # Settlement context — shared village state (neutral info, LLM decides)
         settlement_block = ""
         settlement = getattr(agent, 'settlement', None)
         if settlement:
-            settlement_block = settlement.get_context_for_prompt()
+            _agent_pos = None
+            _is_day = None
+            if perception:
+                _agent_pos = (
+                    int(perception.position.get("x", 0)),
+                    int(perception.position.get("y", 0)),
+                    int(perception.position.get("z", 0)),
+                )
+                _is_day = perception.is_day
+            settlement_block = settlement.get_context_for_prompt(
+                agent_pos=_agent_pos, is_day=_is_day
+            )
 
         # Nearby agents — who else is around
         nearby_agents_block = ""
