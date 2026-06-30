@@ -485,8 +485,10 @@ class ValisAgent:
                     logger.debug(f"FAST-PATH: skipping junk target (priority={target_priority}, type={target_type}), fall to explore")
                     pass  # Fall through to move/explore
                 elif hint == "mine":
-                    # PRIORITY: Check for ANY nearby minable block first (≤4 blocks)
-                    # before navigating to far-away intent targets.
+                    _SURFACE_JUNK_NAV = {"GRASS_BLOCK","SHORT_GRASS","TALL_GRASS","DIRT","SAND","GRAVEL",
+                                         "COARSE_DIRT","PODZOL","MUD","ROOTED_DIRT","FARMLAND","DIRT_PATH",
+                                         "FERN","LARGE_FERN","DANDELION","POPPY","DEAD_BUSH",
+                                         "SUNFLOWER","LILAC","ROSE_BUSH","PEONY"}
                     minable_nearby = [b for b in blocks
                                     if b.get("type","").upper() not in ("AIR","CAVE_AIR","VOID_AIR","BEDROCK","WATER","LAVA")
                                     and "_LEAVES" not in b.get("type","").upper()
@@ -494,7 +496,9 @@ class ValisAgent:
                                     and abs(b.get("x",0)-px) <= 4 and abs(b.get("y",0)-py) <= 4
                                     and abs(b.get("z",0)-pz) <= 4]
                     if minable_nearby:
-                        t = min(minable_nearby, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
+                        valuable_nearby = [b for b in minable_nearby if b.get("type","").upper() not in _SURFACE_JUNK_NAV]
+                        pick_from = valuable_nearby if valuable_nearby else minable_nearby
+                        t = min(pick_from, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
                         tkey = pos_key(t)
                         self._recently_mined[tkey] = now
                         logger.debug(f"FAST-PATH: MINE=nearby {t.get('type','?')} at ({t.get('x')},{t.get('y')},{t.get('z')})")
@@ -849,7 +853,11 @@ class ValisAgent:
 
             # Priority 1 (MINE): Mine nearby blocks first — don't navigate to far-away intent coords
             if hint == "mine":
-                # Find the closest minable block within 4 blocks
+                _SURFACE_JUNK = {"GRASS_BLOCK","SHORT_GRASS","TALL_GRASS","DIRT","SAND","GRAVEL",
+                                 "COARSE_DIRT","PODZOL","MUD","ROOTED_DIRT","FARMLAND","DIRT_PATH",
+                                 "FERN","LARGE_FERN","DANDELION","POPPY","BLUE_ORCHID","ALLIUM",
+                                 "AZURE_BLUET","OXEYE_DAISY","CORNFLOWER","LILY_OF_THE_VALLEY",
+                                 "SUNFLOWER","LILAC","ROSE_BUSH","PEONY","DEAD_BUSH"}
                 minable = [b for b in blocks
                           if b.get("type","").upper() not in ("AIR","CAVE_AIR","VOID_AIR","BEDROCK","WATER","LAVA","CRAFTING_TABLE")
                           and "_LEAVES" not in b.get("type","").upper()
@@ -858,7 +866,10 @@ class ValisAgent:
                                 if abs(b.get("x",0)-px) <= 4 and abs(b.get("y",0)-py) <= 4
                                 and abs(b.get("z",0)-pz) <= 4]
                 if close_minable:
-                    t = min(close_minable, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
+                    # Prefer valuable blocks (logs, ores, stone) over surface junk
+                    valuable = [b for b in close_minable if b.get("type","").upper() not in _SURFACE_JUNK]
+                    pick_from = valuable if valuable else close_minable
+                    t = min(pick_from, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
                     logger.debug(f"FAST-PATH: MINE=nearby {t.get('type','?')} at ({t.get('x')},{t.get('y')},{t.get('z')})")
                     self._nav_target = None
                     return AgentAction(agent_name="", action="mine_block",
@@ -952,14 +963,14 @@ class ValisAgent:
             
             # Priority 3.5: Round-trip — return to center if too far out
             if self.settlement and self.settlement.center:
-                cx, _, cz = self.settlement.center
+                cx, cy, cz = self.settlement.center
                 dist_to_center = math.sqrt((px - cx)**2 + (pz - cz)**2)
                 if dist_to_center > 60:
                     logger.debug(f"FAST-PATH: RETURN-TO-CENTER dist={dist_to_center:.0f}m (>60)")
-                    self._nav_target = (cx, py, cz)
+                    self._nav_target = (cx, cy, cz)
                     self._nav_start = time.time()
                     return AgentAction(agent_name="", action="move_to",
-                                       params={"x": cx, "y": py, "z": cz})
+                                       params={"x": cx, "y": cy, "z": cz})
 
             # Priority 4: Systematic exploration
             if not hasattr(self, '_explore_heading'):
@@ -995,7 +1006,21 @@ class ValisAgent:
                     tx = int(cx + (tx - cx) * _scale)
                     tz = int(cz + (tz - cz) * _scale)
                     logger.debug(f"FAST-PATH: clamped explore target to ({tx},{ty},{tz}), dist_from_center={55}m")
-            logger.debug(f"FAST-PATH: MOVE=explore -> ({tx},{ty},{tz}) heading=({dx},{dz}) step={self._explore_steps} has_wood={has_wood}")
+                    # If clamped target is essentially where we already are, pick a new heading
+                    if abs(tx - px) <= 3 and abs(tz - pz) <= 3:
+                        # Rotate heading 90° instead of standing still
+                        self._explore_heading = (dz, -dx) if random.random() < 0.5 else (-dz, dx)
+                        ndx, ndz = self._explore_heading
+                        tx = int(px + ndx * 20)
+                        tz = int(pz + ndz * 20)
+                        # Re-clamp after rotation
+                        _td2 = math.sqrt((tx - cx)**2 + (tz - cz)**2)
+                        if _td2 > 60:
+                            _s2 = 55 / max(_td2, 1)
+                            tx = int(cx + (tx - cx) * _s2)
+                            tz = int(cz + (tz - cz) * _s2)
+                        logger.debug(f"FAST-PATH: rotated heading to ({ndx},{ndz}) to avoid deadlock, new target ({tx},{ty},{tz})")
+            logger.debug(f"FAST-PATH: MOVE=explore -> ({tx},{ty},{tz}) heading=({self._explore_heading[0]},{self._explore_heading[1]}) step={self._explore_steps} has_wood={has_wood}")
             self._nav_target = (tx, ty, tz)
             self._nav_start = time.time()
             return AgentAction(agent_name="", action="move_to",
@@ -1036,13 +1061,13 @@ class ValisAgent:
                 actual = min(inv.get(item, 0), amount)
                 if actual > 0:
                     if self.settlement and self.settlement.center:
-                        cx, _, cz = self.settlement.center
-                        if abs(px - cx) < 6 and abs(pz - cz) < 6:
+                        cx, cy, cz = self.settlement.center
+                        if abs(px - cx) < 6 and abs(pz - cz) < 6 and abs(py - cy) < 10:
                             return AgentAction(agent_name="", action="deposit_chest",
                                 params={"item": item, "amount": actual})
                         else:
                             return AgentAction(agent_name="", action="move_to",
-                                params={"x": cx, "y": py, "z": cz})
+                                params={"x": cx, "y": cy, "z": cz})
 
         if hint == "withdraw":
             withdraw_match = re.search(r'withdraw\s+(\w+)\s*(\d+)?', intent, re.IGNORECASE)
@@ -1050,13 +1075,13 @@ class ValisAgent:
                 item = withdraw_match.group(1).lower()
                 amount = int(withdraw_match.group(2)) if withdraw_match.group(2) else 10
                 if self.settlement and self.settlement.center:
-                    cx, _, cz = self.settlement.center
-                    if abs(px - cx) < 6 and abs(pz - cz) < 6:
+                    cx, cy, cz = self.settlement.center
+                    if abs(px - cx) < 6 and abs(pz - cz) < 6 and abs(py - cy) < 10:
                         return AgentAction(agent_name="", action="withdraw_chest",
                             params={"item": item, "amount": amount})
                     else:
                         return AgentAction(agent_name="", action="move_to",
-                            params={"x": cx, "y": py, "z": cz})
+                            params={"x": cx, "y": cy, "z": cz})
 
         if hint in ("rest", "idle"):
             return AgentAction(agent_name="", action="idle")
