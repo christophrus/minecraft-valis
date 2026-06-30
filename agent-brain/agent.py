@@ -360,7 +360,7 @@ class ValisAgent:
         if not hasattr(self, '_recently_crafted'):
             self._recently_crafted: dict[str, float] = {}
         now = time.time()
-        self._recently_mined = {k: v for k, v in self._recently_mined.items() if now - v < 5}
+        self._recently_mined = {k: v for k, v in self._recently_mined.items() if now - v < 30}
         self._recently_placed = {k: v for k, v in self._recently_placed.items() if now - v < 120}
         self._recently_failed_place = {k: v for k, v in self._recently_failed_place.items() if now - v < 10}
         # Shorter cooldown (5s instead of 15s) — prevents deadlocks where craft fails
@@ -661,7 +661,8 @@ class ValisAgent:
             else:
                 logger.debug(f"FAST-PATH: HUNT -> no animals nearby")
         # Collect dropped items after hunting
-        if hint == "collect" or "collect" in intent.lower():
+        if hint == "collect" or any(phrase in intent.lower() for phrase in
+                                    ("collect items", "collect drops", "pick up items", "pick up drops")):
             logger.debug(f"FAST-PATH: collecting nearby items")
             return AgentAction(agent_name="", action="collect_items")
 
@@ -1450,6 +1451,13 @@ Respond ONLY with valid JSON:
                 if not self._running:
                     return
                 parsed = self.executor.parse_action(action_str)
+
+                # Block mine_block on recently-mined positions (LLM uses stale coords)
+                if parsed and parsed.action == "mine_block":
+                    mk = f"{int(parsed.params.get('x',0))},{int(parsed.params.get('y',0))},{int(parsed.params.get('z',0))}"
+                    if hasattr(self, '_recently_mined') and mk in self._recently_mined:
+                        logger.debug(f"LLM-PATH: blocking mine_block at recently-mined {mk}")
+                        parsed = None
 
                 # Handle build() action — LLM returns a multi-block placement plan
                 if parsed and parsed.action == "build":
