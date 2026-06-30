@@ -861,8 +861,15 @@ class ValisAgent:
             leaves_nearby = [b for b in blocks if b.get("type","").upper() in
                             ("OAK_LEAVES","BIRCH_LEAVES","SPRUCE_LEAVES","JUNGLE_LEAVES",
                              "ACACIA_LEAVES","DARK_OAK_LEAVES")]
-            if wood_nearby and pos_key(wood_nearby[0]) not in self._recently_mined:
-                t = min(wood_nearby, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("y",0)-py) + abs(b.get("z",0)-pz))
+            wood_available = [b for b in wood_nearby if pos_key(b) not in self._recently_mined]
+            if wood_available:
+                # Prefer reachable logs (at/below foot level) to avoid canopy climbing
+                reachable_wood = [b for b in wood_available if b.get("y", 0) <= py + 2]
+                candidates = reachable_wood or wood_available
+                t = min(candidates, key=lambda b: (
+                    b.get("y", 0),  # lowest first
+                    abs(b.get("x",0)-px) + abs(b.get("z",0)-pz),
+                ))
                 self._nav_target = None
                 return AgentAction(agent_name="", action="mine_block",
                     params={"x": int(t.get("x",px)), "y": int(t.get("y",py-1)), "z": int(t.get("z",pz))})
@@ -1662,7 +1669,12 @@ class Settlement:
         if agent_pos:
             import math as _m
             dist = _m.sqrt((agent_pos[0] - cx)**2 + (agent_pos[2] - cz)**2)
-            lines.append(f"Your distance to settlement: {dist:.0f} blocks.")
+            if dist > 150:
+                lines.append(f"Your distance to settlement: {dist:.0f} blocks (very far — other agents cannot see or hear you).")
+            elif dist > 80:
+                lines.append(f"Your distance to settlement: {dist:.0f} blocks (far from group).")
+            else:
+                lines.append(f"Your distance to settlement: {dist:.0f} blocks.")
         if is_day is not None:
             lines.append(f"Time of day: {'day' if is_day else 'night (hostile mobs spawn)'}.")
         return "\n".join(lines)

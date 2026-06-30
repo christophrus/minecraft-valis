@@ -66,10 +66,13 @@ class Reflection:
 
             insight = await self._synthesize_insight(agent, focal_pt, memories)
             if insight:
-                recent_thoughts = agent.memory.get_recent(n=5, node_type="thought")
+                recent_thoughts = agent.memory.get_recent(n=10, node_type="thought")
                 importance = await self._score_with_novelty(
                     agent, insight, recent_thoughts
                 )
+                if importance < 0.30:
+                    logger.debug(f"REFLECTION: discarding low-value insight (imp={importance:.2f}): {insight[:80]}")
+                    continue
                 await agent.memory.add_thought(
                     content=insight,
                     importance=importance,
