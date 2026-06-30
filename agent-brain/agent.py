@@ -788,22 +788,26 @@ class ValisAgent:
                 dist = math.sqrt((px - tx)**2 + (py - ty)**2 + (pz - tz)**2)
                 elapsed = time.time() - getattr(self, '_nav_start', 0)
                 if dist > 3 and elapsed < 8:
-                    # Mine any reachable wood/ore blocks while walking
-                    if hint == "mine":
-                        walk_minable = [b for b in blocks
-                                       if b.get("type","").upper() in
-                                       ("OAK_LOG","BIRCH_LOG","SPRUCE_LOG","JUNGLE_LOG","ACACIA_LOG",
-                                        "DARK_OAK_LOG","CHERRY_LOG","MANGROVE_LOG","COAL_ORE",
-                                        "IRON_ORE","COPPER_ORE")
-                                       and abs(b.get("x",0)-px) <= 3 and abs(b.get("y",0)-py) <= 3
-                                       and abs(b.get("z",0)-pz) <= 3
-                                       and pos_key(b) not in self._recently_mined]
-                        if walk_minable:
-                            t = min(walk_minable, key=lambda b: abs(b.get("x",0)-px)+abs(b.get("y",0)-py)+abs(b.get("z",0)-pz))
-                            self._recently_mined[pos_key(t)] = now
-                            logger.debug(f"FAST-PATH: mine-while-walking {t.get('type','?')} at ({t.get('x')},{t.get('y')},{t.get('z')})")
-                            return AgentAction(agent_name="", action="mine_block",
-                                params={"x": int(t.get("x",px)), "y": int(t.get("y",py)), "z": int(t.get("z",pz))})
+                    # Mine any reachable wood/ore blocks while walking (all hints, not just mine)
+                    has_wood = any(k in ("oak_log","birch_log","spruce_log","acacia_log","dark_oak_log","cherry_log")
+                                  for k in perception.inventory)
+                    walk_minable = [b for b in blocks
+                                   if b.get("type","").upper() in
+                                   ("OAK_LOG","BIRCH_LOG","SPRUCE_LOG","JUNGLE_LOG","ACACIA_LOG",
+                                    "DARK_OAK_LOG","CHERRY_LOG","MANGROVE_LOG","COAL_ORE",
+                                    "IRON_ORE","COPPER_ORE")
+                                   and abs(b.get("x",0)-px) <= 4 and abs(b.get("z",0)-pz) <= 4
+                                   and b.get("y",0) <= py + 2
+                                   and pos_key(b) not in self._recently_mined]
+                    if walk_minable:
+                        t = min(walk_minable, key=lambda b: (
+                            b.get("y", 0),
+                            abs(b.get("x",0)-px)+abs(b.get("z",0)-pz),
+                        ))
+                        self._recently_mined[pos_key(t)] = now
+                        logger.debug(f"FAST-PATH: mine-while-walking {t.get('type','?')} at ({t.get('x')},{t.get('y')},{t.get('z')})")
+                        return AgentAction(agent_name="", action="mine_block",
+                            params={"x": int(t.get("x",px)), "y": int(t.get("y",py)), "z": int(t.get("z",pz))})
                     logger.debug(f"FAST-PATH: nav in progress, dist={dist:.1f} elapsed={elapsed:.1f}s")
                     return None  # return None → caller falls to LLM-PATH only on non-fast-ticks
                 # Arrived — clear nav target and reset attempts counter for this target
@@ -811,7 +815,38 @@ class ValisAgent:
                 if nav_k in self._nav_target_attempts:
                     del self._nav_target_attempts[nav_k]
                 self._nav_target = None
-            
+
+            # Priority 0 (WOOD): Opportunistic wood mining — any hint, if logs are reachable
+            # This is the critical fix: agents would walk THROUGH forests without mining
+            # because wood-mining only triggered on hint=="mine". Now every hint checks.
+            has_wood = any(k in ("oak_log","birch_log","spruce_log","acacia_log","dark_oak_log","cherry_log")
+                          for k in perception.inventory)
+            has_planks = any("planks" in k for k in perception.inventory)
+            if not has_wood and not has_planks:
+                wood_nearby = [b for b in blocks
+                              if b.get("type","").upper() in
+                              ("OAK_LOG","BIRCH_LOG","SPRUCE_LOG","JUNGLE_LOG","ACACIA_LOG",
+                               "DARK_OAK_LOG","CHERRY_LOG","MANGROVE_LOG")
+                              and b.get("y", 0) <= py + 2
+                              and pos_key(b) not in self._recently_mined]
+                if wood_nearby:
+                    t = min(wood_nearby, key=lambda b: (
+                        b.get("y", 0),
+                        abs(b.get("x",0)-px) + abs(b.get("z",0)-pz),
+                    ))
+                    tdist = abs(t.get("x",0)-px) + abs(t.get("z",0)-pz)
+                    if tdist <= 4:
+                        self._recently_mined[pos_key(t)] = now
+                        logger.debug(f"FAST-PATH: WOOD-GRAB {t.get('type','?')} at ({t.get('x')},{t.get('y')},{t.get('z')}) hint={hint}")
+                        return AgentAction(agent_name="", action="mine_block",
+                            params={"x": int(t.get("x",px)), "y": int(t.get("y",py)), "z": int(t.get("z",pz))})
+                    else:
+                        logger.debug(f"FAST-PATH: WOOD-NAV to {t.get('type','?')} at ({t.get('x')},{t.get('y')},{t.get('z')}) dist={tdist}")
+                        self._nav_target = (int(t.get("x",px)), int(t.get("y",py)), int(t.get("z",pz)))
+                        self._nav_start = time.time()
+                        return AgentAction(agent_name="", action="move_to",
+                            params={"x": int(t.get("x",px)), "y": int(t.get("y",py)), "z": int(t.get("z",pz))})
+
             # Priority 1 (MINE): Mine nearby blocks first — don't navigate to far-away intent coords
             if hint == "mine":
                 # Find the closest minable block within 4 blocks

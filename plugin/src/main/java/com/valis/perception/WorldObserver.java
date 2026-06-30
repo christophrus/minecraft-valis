@@ -291,8 +291,19 @@ public class WorldObserver {
      * Sample key blocks in the agent's vicinity.
      * Reports block types at the agent's feet level and eye level.
      */
+    private static final java.util.Set<Material> HIGH_VALUE_BLOCKS = java.util.Set.of(
+        Material.OAK_LOG, Material.BIRCH_LOG, Material.SPRUCE_LOG, Material.JUNGLE_LOG,
+        Material.ACACIA_LOG, Material.DARK_OAK_LOG, Material.CHERRY_LOG, Material.MANGROVE_LOG,
+        Material.COAL_ORE, Material.IRON_ORE, Material.COPPER_ORE, Material.GOLD_ORE,
+        Material.DIAMOND_ORE, Material.LAPIS_ORE, Material.REDSTONE_ORE,
+        Material.DEEPSLATE_COAL_ORE, Material.DEEPSLATE_IRON_ORE, Material.DEEPSLATE_COPPER_ORE,
+        Material.DEEPSLATE_GOLD_ORE, Material.DEEPSLATE_DIAMOND_ORE,
+        Material.CRAFTING_TABLE, Material.FURNACE, Material.CHEST
+    );
+
     private JsonArray observeBlocks(Location loc, World world) {
         JsonArray blocks = new JsonArray();
+        JsonArray highValueBlocks = new JsonArray();
         int r = Math.min(radius, 12);
         int bx = loc.getBlockX();
         int by = loc.getBlockY();
@@ -303,28 +314,34 @@ public class WorldObserver {
                 if (dx == 0 && dz == 0) continue;
                 int wx = bx + dx;
                 int wz = bz + dz;
-                // Skip unloaded chunks — accessing block data in unloaded chunks
-                // causes the server to freeze waiting for chunk generation (thread dump).
                 if (!world.isChunkLoaded(wx >> 4, wz >> 4)) continue;
                 for (int dy = -1; dy <= 8; dy++) {
                     Block block = world.getBlockAt(wx, by + dy, wz);
                     Material mat = block.getType();
-                    if (mat != Material.AIR && mat != Material.CAVE_AIR && mat != Material.VOID_AIR) {
-                        JsonObject b = new JsonObject();
-                        b.addProperty("x", wx);
-                        b.addProperty("y", by + dy);
-                        b.addProperty("z", wz);
-                        b.addProperty("type", mat.name());
-                        b.addProperty("relative_x", dx);
-                        b.addProperty("relative_y", dy);
-                        b.addProperty("relative_z", dz);
-                        blocks.add(b);
-                        if (blocks.size() >= 80) break;
+                    if (mat == Material.AIR || mat == Material.CAVE_AIR || mat == Material.VOID_AIR)
+                        continue;
+                    JsonObject b = new JsonObject();
+                    b.addProperty("x", wx);
+                    b.addProperty("y", by + dy);
+                    b.addProperty("z", wz);
+                    b.addProperty("type", mat.name());
+                    b.addProperty("relative_x", dx);
+                    b.addProperty("relative_y", dy);
+                    b.addProperty("relative_z", dz);
+                    if (HIGH_VALUE_BLOCKS.contains(mat)) {
+                        if (highValueBlocks.size() < 20) highValueBlocks.add(b);
+                    } else {
+                        if (blocks.size() < 60) blocks.add(b);
                     }
                 }
-                if (blocks.size() >= 80) break;
+                if (blocks.size() >= 60 && highValueBlocks.size() >= 20) break;
             }
-            if (blocks.size() >= 80) break;
+            if (blocks.size() >= 60 && highValueBlocks.size() >= 20) break;
+        }
+        // High-value blocks always included — they were invisible before because
+        // 80 dirt/stone blocks filled the cap before any log/ore was reached.
+        for (int i = 0; i < highValueBlocks.size(); i++) {
+            blocks.add(highValueBlocks.get(i));
         }
         return blocks;
     }
