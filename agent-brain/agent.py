@@ -122,6 +122,8 @@ class ValisAgent:
         self._failed_actions: dict[str, int] = {}  # Track repeated failures to avoid retrying (e.g. "place:stick")
         self._craft_idle_streak: int = 0  # Count consecutive craft→idle cycles to break deadlocks
         self._build_queue: list[AgentAction] = []  # Queued place_block actions for multi-block building
+        self._pending_shelter_pos: tuple[int, int, int] | None = None
+        self._build_blocks_placed: int = 0
 
         # Performance: controller cache + APM tracking
         self._cached_decision: object | None = None
@@ -975,18 +977,34 @@ class ValisAgent:
             if out_of_material:
                 dropped = len(self._build_queue)
                 self._build_queue.clear()
+                self._pending_shelter_pos = None
                 logger.warning(f"BUILD-QUEUE: out of material, cleared {dropped} blocks: {result.details}")
             else:
                 self._build_fail_streak = getattr(self, '_build_fail_streak', 0) + 1
                 if self._build_fail_streak >= 3:
                     dropped = len(self._build_queue)
                     self._build_queue.clear()
+                    self._pending_shelter_pos = None
                     logger.warning(f"BUILD-QUEUE: {self._build_fail_streak} consecutive failures, aborting build ({dropped} blocks left)")
                     self._build_fail_streak = 0
                 else:
                     logger.debug(f"BUILD-QUEUE: skipping blocked cell ({len(self._build_queue)} left): {result.details}")
         elif result.success and result.action == "place_block":
             self._build_fail_streak = 0
+            self._build_blocks_placed = getattr(self, '_build_blocks_placed', 0) + 1
+
+        # Register shelter only after build queue completes with blocks actually placed
+        if result.action in ("place_block", "move_to") and not self._build_queue:
+            pending = getattr(self, '_pending_shelter_pos', None)
+            placed = getattr(self, '_build_blocks_placed', 0)
+            if pending and placed >= 4:
+                if self.settlement:
+                    self.settlement.register_shelter(*pending)
+                logger.info(f"BUILD-COMPLETE: shelter registered at {pending} ({placed} blocks placed)")
+            elif pending and placed < 4:
+                logger.info(f"BUILD-INCOMPLETE: skipping shelter registration at {pending} (only {placed} blocks placed)")
+            self._pending_shelter_pos = None
+            self._build_blocks_placed = 0
 
         # Track repeated failures to avoid retrying the same broken action
         if not result.success:
@@ -1187,11 +1205,15 @@ Respond ONLY with valid JSON:
                 self._last_build_mat_log = total_mat
                 logger.debug(f"FAST-BUILD: not enough material (total={total_mat}, best={material}:{inv.get(material,0)}), deferring")
             return None
-        if getattr(self, '_recently_built', 0) and time.time() - self._recently_built < 120:
-            return None
-
         pos = perception.position
         cx, cy, cz = int(pos.get("x", 0)), int(pos.get("y", 0)), int(pos.get("z", 0))
+
+        # Location-specific cooldown: don't rebuild within 10 blocks of a recent build site
+        import math as _m
+        build_sites = getattr(self, '_recent_build_sites', {})
+        for (bx, by, bz), ts in build_sites.items():
+            if time.time() - ts < 300 and _m.sqrt((cx-bx)**2 + (cy-by)**2 + (cz-bz)**2) < 10:
+                return None
 
         # Don't build near water — any water/beach block within 4 blocks horizontally
         water_types = frozenset({"WATER", "SAND", "SEAGRASS", "TALL_SEAGRASS", "KELP", "KELP_PLANT",
@@ -1215,9 +1237,10 @@ Respond ONLY with valid JSON:
         self._build_queue.append(AgentAction(
             agent_name="", action="move_to",
             params={"x": cx, "y": cy, "z": cz + 3}))
-        self._recently_built = time.time()
-        if self.settlement:
-            self.settlement.register_shelter(cx, cy, cz)
+        if not hasattr(self, '_recent_build_sites'):
+            self._recent_build_sites = {}
+        self._recent_build_sites[(cx, cy, cz)] = time.time()
+        self._pending_shelter_pos = (cx, cy, cz)
         logger.info(f"FAST-BUILD: starting shelter ({total_mat} total material) at ({cx},{cy},{cz})")
         return self._build_queue.pop(0)
 
@@ -1469,8 +1492,7 @@ Respond ONLY with valid JSON:
                         self._build_queue.append(AgentAction(
                             agent_name="", action="move_to",
                             params={"x": bx, "y": by, "z": bz + 3}))
-                        if self.settlement:
-                            self.settlement.register_shelter(bx, by, bz)
+                        self._pending_shelter_pos = (bx, by, bz)
                         parsed = self._build_queue.pop(0)
                         logger.debug(f"BUILD-QUEUE: expanded build into {len(self._build_queue)} blocks + exit-move, starting first")
                     else:
@@ -1650,14 +1672,23 @@ class Settlement:
     def __init__(self):
         self.center: tuple[int, int, int] | None = None
         self.shelters_built: int = 0
+        self.shelter_positions: list[tuple[int, int, int]] = []
         self.crafting_tables: list[tuple[int, int, int]] = []
 
-    def register_shelter(self, x: int, y: int, z: int):
+    def register_shelter(self, x: int, y: int, z: int) -> bool:
+        """Register a shelter. Returns False if a shelter already exists within 8 blocks."""
+        import math as _m
+        for sx, sy, sz in self.shelter_positions:
+            if _m.sqrt((x - sx)**2 + (y - sy)**2 + (z - sz)**2) < 8:
+                logger.debug(f"SETTLEMENT: skipping duplicate shelter at ({x},{y},{z}) — too close to ({sx},{sy},{sz})")
+                return False
         if self.center is None:
             self.center = (x, y, z)
             logger.info(f"SETTLEMENT: center established at ({x},{y},{z})")
-        self.shelters_built += 1
+        self.shelter_positions.append((x, y, z))
+        self.shelters_built = len(self.shelter_positions)
         logger.info(f"SETTLEMENT: shelter #{self.shelters_built} at ({x},{y},{z})")
+        return True
 
     def register_crafting_table(self, x: int, y: int, z: int):
         pos = (x, y, z)
