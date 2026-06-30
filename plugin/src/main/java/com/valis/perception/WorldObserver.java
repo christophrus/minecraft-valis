@@ -114,6 +114,13 @@ public class WorldObserver {
                 Location cl = plugin.getVillageChestLocation();
                 report.addProperty("village_chest_distance",
                         (int) loc.distance(cl));
+                // Report the chest's real (surface-snapped) position so the brain can
+                // sync the settlement center Y — otherwise it stays at a stale y=64.
+                JsonObject chestPos = new JsonObject();
+                chestPos.addProperty("x", cl.getBlockX());
+                chestPos.addProperty("y", cl.getBlockY());
+                chestPos.addProperty("z", cl.getBlockZ());
+                report.add("village_chest_pos", chestPos);
             }
         }
 

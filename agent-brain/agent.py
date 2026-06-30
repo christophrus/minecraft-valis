@@ -961,12 +961,25 @@ class ValisAgent:
                 return AgentAction(agent_name="", action="move_to",
                                    params={"x": tx, "y": ty, "z": tz})
             
-            # Priority 3.5: Round-trip — return to center if too far out
+            # Adaptive leash: an empty-handed gatherer may range far enough to REACH
+            # the nearest resource (trees can be 70+ blocks away on treeless plains),
+            # but once it carries cargo it returns home to deposit. This resolves the
+            # catch-22 where a tight 60-block leash pulled agents back before they ever
+            # got within perception range (12 blocks) of the only forest.
+            _CARGO_KEYS = ("log", "planks", "ore", "ingot", "cobblestone", "coal",
+                           "raw_", "diamond", "stone", "stick", "torch")
+            carrying_cargo = sum(
+                cnt for k, cnt in perception.inventory.items()
+                if any(c in k for c in _CARGO_KEYS)
+            ) >= 4
+            leash = 60 if carrying_cargo else 110
+
+            # Priority 3.5: Round-trip — return to center if beyond the (adaptive) leash
             if self.settlement and self.settlement.center:
                 cx, cy, cz = self.settlement.center
                 dist_to_center = math.sqrt((px - cx)**2 + (pz - cz)**2)
-                if dist_to_center > 60:
-                    logger.debug(f"FAST-PATH: RETURN-TO-CENTER dist={dist_to_center:.0f}m (>60)")
+                if dist_to_center > leash:
+                    logger.debug(f"FAST-PATH: RETURN-TO-CENTER dist={dist_to_center:.0f}m (>{leash}, cargo={carrying_cargo})")
                     self._nav_target = (cx, cy, cz)
                     self._nav_start = time.time()
                     return AgentAction(agent_name="", action="move_to",
@@ -997,15 +1010,17 @@ class ValisAgent:
             dx, dz = self._explore_heading
             dist = random.randint(30, 50) if forest_nearby else random.randint(15, 30)  # Go deeper into forest
             tx, ty, tz = px + dx * dist, py, pz + dz * dist
-            # Clamp explore target so agent stays within 60 blocks of settlement center
+            # Clamp explore target to the adaptive leash (110 while gathering, 60 with cargo)
             if self.settlement and self.settlement.center:
                 cx, _, cz = self.settlement.center
+                _clamp = leash
+                _inner = max(_clamp - 5, 5)
                 _target_dist = math.sqrt((tx - cx)**2 + (tz - cz)**2)
-                if _target_dist > 60:
-                    _scale = 55 / max(_target_dist, 1)
+                if _target_dist > _clamp:
+                    _scale = _inner / max(_target_dist, 1)
                     tx = int(cx + (tx - cx) * _scale)
                     tz = int(cz + (tz - cz) * _scale)
-                    logger.debug(f"FAST-PATH: clamped explore target to ({tx},{ty},{tz}), dist_from_center={55}m")
+                    logger.debug(f"FAST-PATH: clamped explore target to ({tx},{ty},{tz}), dist_from_center={_inner}m (leash={_clamp})")
                     # If clamped target is essentially where we already are, pick a new heading
                     if abs(tx - px) <= 3 and abs(tz - pz) <= 3:
                         # Rotate heading 90° instead of standing still
@@ -1015,8 +1030,8 @@ class ValisAgent:
                         tz = int(pz + ndz * 20)
                         # Re-clamp after rotation
                         _td2 = math.sqrt((tx - cx)**2 + (tz - cz)**2)
-                        if _td2 > 60:
-                            _s2 = 55 / max(_td2, 1)
+                        if _td2 > _clamp:
+                            _s2 = _inner / max(_td2, 1)
                             tx = int(cx + (tx - cx) * _s2)
                             tz = int(cz + (tz - cz) * _s2)
                         logger.debug(f"FAST-PATH: rotated heading to ({ndx},{ndz}) to avoid deadlock, new target ({tx},{ty},{tz})")
@@ -1097,6 +1112,14 @@ class ValisAgent:
         # Sync village chest contents from perception into settlement
         if self.settlement and perception.village_chest:
             self.settlement.update_chest(perception.village_chest)
+        # Sync settlement center to the chest's REAL surface position. The chest is
+        # snapped to ground level by the plugin; a stale hardcoded y=64 center would
+        # send agents to a buried point they can never reach to deposit.
+        if self.settlement and perception.village_chest_pos:
+            cp = perception.village_chest_pos
+            real = (int(cp.get("x", 0)), int(cp.get("y", 64)), int(cp.get("z", 0)))
+            if self.settlement.center != real:
+                self.settlement.center = real
         self.perception_processor.update(perception)
         self._pending_perception = perception
         self._perception_event.set()

@@ -32,6 +32,7 @@ class PerceptionData:
     nearby_chat: list[str] = field(default_factory=list)  # ["[BuilderAlice] I need wood", ...]
     village_chest: dict[str, int] = field(default_factory=dict)  # shared chest contents
     village_chest_distance: int = -1  # distance to village chest, -1 if no chest
+    village_chest_pos: dict[str, int] = field(default_factory=dict)  # real chest {x,y,z}
 
     @classmethod
     def from_json(cls, data: dict) -> "PerceptionData":
@@ -54,6 +55,7 @@ class PerceptionData:
             nearby_chat=data.get("nearby_chat", []),
             village_chest=data.get("village_chest", {}),
             village_chest_distance=data.get("village_chest_distance", -1),
+            village_chest_pos=data.get("village_chest_pos", {}),
         )
 
 

@@ -184,13 +184,17 @@ public class WebSocketBridge extends WebSocketServer {
 
     private void handlePlaceVillageChest(JsonObject msg) {
         int x = msg.has("x") ? msg.get("x").getAsInt() : 0;
-        int y = msg.has("y") ? msg.get("y").getAsInt() : 64;
         int z = msg.has("z") ? msg.get("z").getAsInt() : 0;
         plugin.getServer().getScheduler().runTask(plugin, () -> {
             var world = plugin.getServer().getWorld(plugin.getValisConfig().getWorldName());
             if (world == null) return;
-            var loc = new org.bukkit.Location(world, x, y, z);
+            // Snap the chest to the actual ground surface. A hardcoded y (e.g. 64) can
+            // bury the chest 15 blocks underground on hilly terrain — agents then stand
+            // on the surface unable to reach it, breaking the whole village economy.
+            int surfaceY = world.getHighestBlockYAt(x, z) + 1;
+            var loc = new org.bukkit.Location(world, x, surfaceY, z);
             plugin.setVillageChestLocation(loc);
+            log.info("Village chest snapped to surface at (" + x + "," + surfaceY + "," + z + ")");
         });
     }
 
