@@ -160,11 +160,19 @@ class CognitiveController:
                 descs = [f"{e.get('name','?')} ({e.get('distance',0):.0f}m away)" for e in agent_entities[:5]]
                 nearby_agents_block = "VILLAGE MEMBERS NEARBY: " + ", ".join(descs)
 
+        # Nearby chat — messages heard from other agents and players
+        nearby_chat_block = ""
+        if perception and perception.nearby_chat:
+            nearby_chat_block = "HEARD RECENTLY:\n" + "\n".join(
+                f"  {msg}" for msg in perception.nearby_chat[-5:]
+            )
+
         prompt = f"""You control {agent.name}, an AI in Minecraft. Pick ONE action. Be concise — output ONLY JSON, max 300 chars.
 
 {personality_block}
 {settlement_block}
 {nearby_agents_block}
+{nearby_chat_block}
 INVENTORY: {inv_text}
 
 PERCEPTION:
@@ -188,6 +196,7 @@ action_hint choices: mine|craft|place|build|move|explore|hunt|socialize|rest
 To craft: use action_hint "craft" and specify the item name in intent. Only craft items listed in CAN CRAFT NOW.
 To get missing materials: mine or gather what ALMOST CRAFTABLE shows.
 To build a shelter: use action_hint "build". The agent will construct a 3x3 shelter automatically.
+chat_hint: optional short message spoken aloud in Minecraft chat. Other agents and players can hear it. Use it to coordinate, share info, or respond to what you heard. Leave empty if nothing to say.
 
 Output ONLY JSON:
 {{"intent": "what and where", "reason": "why (1 sentence)", "priority": 0-10, "action_hint": "mine|craft|...", "chat_hint": ""}}"""

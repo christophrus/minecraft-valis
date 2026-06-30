@@ -1584,8 +1584,8 @@ Respond ONLY with valid JSON:
                 )
                 await self.bridge.send_state(state)
 
-                # If the controller suggests chatting, do that too
-                if decision.chat_hint and decision.action_hint == "socialize":
+                # Send chat if the LLM wants to say something (any action, not just socialize)
+                if decision.chat_hint and self.bridge:
                     chat = AgentChat(agent_name=self.name, text=decision.chat_hint)
                     await self.bridge.send_chat(chat)
             elif not parsed:

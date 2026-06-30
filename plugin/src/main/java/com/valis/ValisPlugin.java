@@ -78,6 +78,16 @@ public class ValisPlugin extends JavaPlugin {
                 if (wsBridge != null && wsBridge.isRunning()) {
                     wsBridge.sendPlayerChat(event.getPlayer().getName(), event.getMessage());
                 }
+                // Deliver player chat to nearby NPCs so they can "hear" it
+                var playerLoc = event.getPlayer().getLocation();
+                int hearRange = 30;
+                for (var agent : agents.values()) {
+                    var agentLoc = agent.getLocation();
+                    if (agentLoc != null && agentLoc.getWorld() == playerLoc.getWorld()
+                            && agentLoc.distance(playerLoc) <= hearRange) {
+                        agent.hearChat(event.getPlayer().getName(), event.getMessage());
+                    }
+                }
             }
             @EventHandler
             public void onInvClick(InventoryClickEvent event) {

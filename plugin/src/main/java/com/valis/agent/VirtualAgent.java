@@ -43,6 +43,10 @@ public class VirtualAgent {
     private volatile String cognitiveAction = "";
     private volatile String cognitivePlan = "";
 
+    // Chat buffer — recent messages this agent can "hear" (from nearby NPCs + players)
+    private final java.util.List<String> chatBuffer = java.util.Collections.synchronizedList(
+            new java.util.ArrayList<>());
+
     // Chunk loading — NPCs don't trigger chunk loading like players do.
     // We use Paper's plugin chunk ticket API to keep chunks loaded around the agent.
     private int[] _lastChunkCenter = null;
@@ -185,11 +189,33 @@ public class VirtualAgent {
         if (npc != null && npc.isSpawned()) {
             var loc = npc.getStoredLocation();
             if (loc != null && loc.getWorld() != null) {
+                // Show to all players in the world
                 loc.getWorld().getPlayers().forEach(player ->
                     player.sendMessage("§7[§b" + name + "§7]§f " + text)
                 );
+                // Deliver to nearby NPC agents so they can "hear" it
+                int hearRange = 30;
+                for (VirtualAgent other : plugin.getAgents().values()) {
+                    if (other == this || other.npc == null || !other.npc.isSpawned()) continue;
+                    var otherLoc = other.npc.getStoredLocation();
+                    if (otherLoc != null && otherLoc.getWorld() == loc.getWorld()
+                            && otherLoc.distance(loc) <= hearRange) {
+                        other.hearChat(name, text);
+                    }
+                }
             }
         }
+    }
+
+    public void hearChat(String speaker, String text) {
+        chatBuffer.add("[" + speaker + "] " + text);
+        if (chatBuffer.size() > 10) chatBuffer.remove(0);
+    }
+
+    public java.util.List<String> drainChatBuffer() {
+        var copy = new java.util.ArrayList<>(chatBuffer);
+        chatBuffer.clear();
+        return copy;
     }
 
     public String getAgentName() { return name; }

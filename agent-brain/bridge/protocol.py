@@ -29,6 +29,7 @@ class PerceptionData:
     nearby_biomes: dict[str, str] = field(default_factory=dict)  # {"north": "forest", ...}
     craftable: list[dict[str, Any]] = field(default_factory=list)  # [{item, amount, cost}, ...]
     almost_craftable: list[dict[str, Any]] = field(default_factory=list)  # [{item, amount, missing}, ...]
+    nearby_chat: list[str] = field(default_factory=list)  # ["[BuilderAlice] I need wood", ...]
 
     @classmethod
     def from_json(cls, data: dict) -> "PerceptionData":
@@ -48,6 +49,7 @@ class PerceptionData:
             nearby_biomes=data.get("nearby_biomes", {}),
             craftable=craft_data.get("can_craft", []) if isinstance(craft_data, dict) else [],
             almost_craftable=craft_data.get("almost", []) if isinstance(craft_data, dict) else [],
+            nearby_chat=data.get("nearby_chat", []),
         )
 
 

@@ -18,6 +18,7 @@ import org.bukkit.inventory.ShapedRecipe;
 import org.bukkit.inventory.ShapelessRecipe;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -90,6 +91,16 @@ public class WorldObserver {
         // Agent state
         report.addProperty("health", 20);
         report.add("inventory", agent.inventoryToJson());
+
+        // Nearby chat — messages this agent has "heard" since last perception tick
+        List<String> heardChat = agent.drainChatBuffer();
+        if (!heardChat.isEmpty()) {
+            JsonArray chatArray = new JsonArray();
+            for (String msg : heardChat) {
+                chatArray.add(msg);
+            }
+            report.add("nearby_chat", chatArray);
+        }
 
         // Craftable items analysis
         try {
