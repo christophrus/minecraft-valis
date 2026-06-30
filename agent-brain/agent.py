@@ -1584,8 +1584,8 @@ Respond ONLY with valid JSON:
                 )
                 await self.bridge.send_state(state)
 
-                # Send chat if the LLM wants to say something (any action, not just socialize)
-                if decision.chat_hint and self.bridge:
+                # Send chat only on fresh (non-cached) decisions to avoid spam
+                if decision.chat_hint and self.bridge and not _ctrl_cached:
                     chat = AgentChat(agent_name=self.name, text=decision.chat_hint)
                     await self.bridge.send_chat(chat)
             elif not parsed:
