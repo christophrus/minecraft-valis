@@ -960,10 +960,7 @@ class ValisAgent:
                 mkey = f"{coord_match.group(1)},{coord_match.group(2)},{coord_match.group(3)}"
                 self._recently_mined[mkey] = __import__('time').time()
 
-        # Build-queue failure handling: only abort when we've run OUT of material.
-        # A "position occupied" just means that cell already has terrain (e.g. the floor
-        # ring overlaps the ground) — skip it and keep building the rest of the shelter
-        # instead of throwing the whole structure away on the first such block.
+        # Build-queue failure handling: abort on material shortage or repeated failures.
         if not result.success and result.action == "place_block" and self._build_queue:
             details = (result.details or "").lower()
             out_of_material = "missing" in details or "don't have" in details or "no " in details
@@ -972,7 +969,16 @@ class ValisAgent:
                 self._build_queue.clear()
                 logger.warning(f"BUILD-QUEUE: out of material, cleared {dropped} blocks: {result.details}")
             else:
-                logger.debug(f"BUILD-QUEUE: skipping blocked cell ({len(self._build_queue)} left): {result.details}")
+                self._build_fail_streak = getattr(self, '_build_fail_streak', 0) + 1
+                if self._build_fail_streak >= 3:
+                    dropped = len(self._build_queue)
+                    self._build_queue.clear()
+                    logger.warning(f"BUILD-QUEUE: {self._build_fail_streak} consecutive failures, aborting build ({dropped} blocks left)")
+                    self._build_fail_streak = 0
+                else:
+                    logger.debug(f"BUILD-QUEUE: skipping blocked cell ({len(self._build_queue)} left): {result.details}")
+        elif result.success and result.action == "place_block":
+            self._build_fail_streak = 0
 
         # Track repeated failures to avoid retrying the same broken action
         if not result.success:
