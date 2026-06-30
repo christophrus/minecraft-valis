@@ -30,6 +30,8 @@ class PerceptionData:
     craftable: list[dict[str, Any]] = field(default_factory=list)  # [{item, amount, cost}, ...]
     almost_craftable: list[dict[str, Any]] = field(default_factory=list)  # [{item, amount, missing}, ...]
     nearby_chat: list[str] = field(default_factory=list)  # ["[BuilderAlice] I need wood", ...]
+    village_chest: dict[str, int] = field(default_factory=dict)  # shared chest contents
+    village_chest_distance: int = -1  # distance to village chest, -1 if no chest
 
     @classmethod
     def from_json(cls, data: dict) -> "PerceptionData":
@@ -50,6 +52,8 @@ class PerceptionData:
             craftable=craft_data.get("can_craft", []) if isinstance(craft_data, dict) else [],
             almost_craftable=craft_data.get("almost", []) if isinstance(craft_data, dict) else [],
             nearby_chat=data.get("nearby_chat", []),
+            village_chest=data.get("village_chest", {}),
+            village_chest_distance=data.get("village_chest_distance", -1),
         )
 
 

@@ -102,6 +102,21 @@ public class WorldObserver {
             report.add("nearby_chat", chatArray);
         }
 
+        // Village chest contents (if chest exists)
+        var chestContents = plugin.getVillageChestContents();
+        if (!chestContents.isEmpty() || plugin.getVillageChestLocation() != null) {
+            JsonObject chestJson = new JsonObject();
+            for (var entry : chestContents.entrySet()) {
+                chestJson.addProperty(entry.getKey(), entry.getValue());
+            }
+            report.add("village_chest", chestJson);
+            if (plugin.getVillageChestLocation() != null) {
+                Location cl = plugin.getVillageChestLocation();
+                report.addProperty("village_chest_distance",
+                        (int) loc.distance(cl));
+            }
+        }
+
         // Craftable items analysis
         try {
             report.add("craftable", observeCraftable());

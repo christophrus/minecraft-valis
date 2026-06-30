@@ -89,6 +89,7 @@ public class WebSocketBridge extends WebSocketServer {
                 case "agent_action" -> handleAgentAction(msg);
                 case "agent_chat" -> handleAgentChat(msg);
                 case "agent_state" -> handleAgentState(msg);
+                case "place_village_chest" -> handlePlaceVillageChest(msg);
                 default -> log.warning("Unknown message type: " + type);
             }
         } catch (Exception e) {
@@ -179,6 +180,18 @@ public class WebSocketBridge extends WebSocketServer {
         if (agent != null) {
             agent.updateCognitiveState(task, reason, action, plan);
         }
+    }
+
+    private void handlePlaceVillageChest(JsonObject msg) {
+        int x = msg.has("x") ? msg.get("x").getAsInt() : 0;
+        int y = msg.has("y") ? msg.get("y").getAsInt() : 64;
+        int z = msg.has("z") ? msg.get("z").getAsInt() : 0;
+        plugin.getServer().getScheduler().runTask(plugin, () -> {
+            var world = plugin.getServer().getWorld(plugin.getValisConfig().getWorldName());
+            if (world == null) return;
+            var loc = new org.bukkit.Location(world, x, y, z);
+            plugin.setVillageChestLocation(loc);
+        });
     }
 
     // --- Outgoing Messages ---

@@ -160,16 +160,24 @@ class CognitiveController:
                 descs = [f"{e.get('name','?')} ({e.get('distance',0):.0f}m away)" for e in agent_entities[:5]]
                 nearby_agents_block = "VILLAGE MEMBERS NEARBY: " + ", ".join(descs)
 
-        # Nearby chat — messages heard from other agents and players
+        # Nearby chat — from agent's chat inbox (accumulated across perceptions)
         nearby_chat_block = ""
-        if perception and perception.nearby_chat:
+        _inbox = getattr(agent, '_chat_inbox', [])
+        if _inbox:
             nearby_chat_block = "HEARD RECENTLY:\n" + "\n".join(
-                f"  {msg}" for msg in perception.nearby_chat[-5:]
+                f"  {msg}" for msg in _inbox[-5:]
             )
+
+        # Village Council assignment — strategic task from the village planner
+        council_block = ""
+        _assignment = getattr(agent, '_council_assignment', "")
+        if _assignment:
+            council_block = f"VILLAGE COUNCIL ASSIGNMENT: {_assignment}"
 
         prompt = f"""You control {agent.name}, an AI in Minecraft. Pick ONE action. Be concise — output ONLY JSON, max 300 chars.
 
 {personality_block}
+{council_block}
 {settlement_block}
 {nearby_agents_block}
 {nearby_chat_block}
@@ -191,15 +199,18 @@ RELEVANT MEMORIES (weighted by importance+recency+relevance):
 {reflection_text}
 {discrepancy_text}
 
-action_hint choices: mine|craft|place|build|move|explore|hunt|socialize|give|rest
+action_hint choices: mine|craft|place|build|move|explore|hunt|socialize|give|deposit|withdraw|rest
 
 To craft: use action_hint "craft" and specify the item name in intent. Only craft items listed in CAN CRAFT NOW.
 To get missing materials: mine or gather what ALMOST CRAFTABLE shows.
 To build a shelter: use action_hint "build". The agent will construct a 3x3 shelter automatically.
 To give items to another agent: use action_hint "give" and specify "give [item] to [AgentName]" in intent. You must be near the target agent.
+To deposit surplus items into the village chest: use action_hint "deposit" and specify "deposit [item] [amount]" in intent. You must be near the settlement center.
+To withdraw items from the village chest: use action_hint "withdraw" and specify "withdraw [item] [amount]" in intent. You must be near the settlement center.
 chat_hint: optional short message spoken aloud in Minecraft chat. Other agents and players can hear it. Use it to coordinate, share info, or respond to what you heard. Leave empty if nothing to say.
 
-COOPERATION: Check VILLAGE MEMBERS STATUS. If another agent needs resources you have surplus of, consider giving them. If you need something, ask via chat_hint. Specialization makes the village stronger.
+VILLAGE ECONOMY: The village chest at the settlement center is the shared storage. After gathering resources, RETURN to center and deposit surplus. Before building, check the chest for materials. This loop (gather → return → deposit → repeat) is how the village grows.
+If you have a VILLAGE COUNCIL ASSIGNMENT, follow it — it coordinates the whole village.
 
 Output ONLY JSON:
 {{"intent": "what and where", "reason": "why (1 sentence)", "priority": 0-10, "action_hint": "mine|craft|...", "chat_hint": ""}}"""

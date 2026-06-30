@@ -137,6 +137,12 @@ class ValisAgent:
         self._blacklisted_nav_targets: set[str] = set()  # unreachable targets
         self.settlement: "Settlement | None" = None  # set by AgentManager after creation
 
+        # Chat inbox — accumulates across perception overwrites, drained by tick loop
+        self._chat_inbox: list[str] = []
+        # Village Council assignment for this agent (set by AgentManager)
+        self._council_assignment: str = ""
+        self._council_tick: int = 0
+
         logger.info(f"Agent created: {self.name} ({self.personality}) [{self.agent_id}]")
 
     # --- Public API ---
@@ -909,6 +915,17 @@ class ValisAgent:
                 return AgentAction(agent_name="", action="move_to",
                                    params={"x": tx, "y": ty, "z": tz})
             
+            # Priority 3.5: Round-trip — return to center if too far out
+            if self.settlement and self.settlement.center:
+                cx, _, cz = self.settlement.center
+                dist_to_center = math.sqrt((px - cx)**2 + (pz - cz)**2)
+                if dist_to_center > 60:
+                    logger.debug(f"FAST-PATH: RETURN-TO-CENTER dist={dist_to_center:.0f}m (>60)")
+                    self._nav_target = (cx, py, cz)
+                    self._nav_start = time.time()
+                    return AgentAction(agent_name="", action="move_to",
+                                       params={"x": cx, "y": py, "z": cz})
+
             # Priority 4: Systematic exploration
             if not hasattr(self, '_explore_heading'):
                 self._explore_heading = None
@@ -934,6 +951,15 @@ class ValisAgent:
             dx, dz = self._explore_heading
             dist = random.randint(30, 50) if forest_nearby else random.randint(15, 30)  # Go deeper into forest
             tx, ty, tz = px + dx * dist, py, pz + dz * dist
+            # Clamp explore target so agent stays within 60 blocks of settlement center
+            if self.settlement and self.settlement.center:
+                cx, _, cz = self.settlement.center
+                _target_dist = math.sqrt((tx - cx)**2 + (tz - cz)**2)
+                if _target_dist > 60:
+                    _scale = 55 / max(_target_dist, 1)
+                    tx = int(cx + (tx - cx) * _scale)
+                    tz = int(cz + (tz - cz) * _scale)
+                    logger.debug(f"FAST-PATH: clamped explore target to ({tx},{ty},{tz}), dist_from_center={55}m")
             logger.debug(f"FAST-PATH: MOVE=explore -> ({tx},{ty},{tz}) heading=({dx},{dz}) step={self._explore_steps} has_wood={has_wood}")
             self._nav_target = (tx, ty, tz)
             self._nav_start = time.time()
@@ -966,6 +992,37 @@ class ValisAgent:
                                     params={"x": int(e.get("x",px)), "y": int(e.get("y",py)),
                                             "z": int(e.get("z",pz))})
 
+        if hint == "deposit":
+            deposit_match = re.search(r'deposit\s+(\w+)\s*(\d+)?', intent, re.IGNORECASE)
+            if deposit_match:
+                item = deposit_match.group(1).lower()
+                amount = int(deposit_match.group(2)) if deposit_match.group(2) else 10
+                inv = perception.inventory
+                actual = min(inv.get(item, 0), amount)
+                if actual > 0:
+                    if self.settlement and self.settlement.center:
+                        cx, _, cz = self.settlement.center
+                        if abs(px - cx) < 6 and abs(pz - cz) < 6:
+                            return AgentAction(agent_name="", action="deposit_chest",
+                                params={"item": item, "amount": actual})
+                        else:
+                            return AgentAction(agent_name="", action="move_to",
+                                params={"x": cx, "y": py, "z": cz})
+
+        if hint == "withdraw":
+            withdraw_match = re.search(r'withdraw\s+(\w+)\s*(\d+)?', intent, re.IGNORECASE)
+            if withdraw_match:
+                item = withdraw_match.group(1).lower()
+                amount = int(withdraw_match.group(2)) if withdraw_match.group(2) else 10
+                if self.settlement and self.settlement.center:
+                    cx, _, cz = self.settlement.center
+                    if abs(px - cx) < 6 and abs(pz - cz) < 6:
+                        return AgentAction(agent_name="", action="withdraw_chest",
+                            params={"item": item, "amount": amount})
+                    else:
+                        return AgentAction(agent_name="", action="move_to",
+                            params={"x": cx, "y": py, "z": cz})
+
         if hint in ("rest", "idle"):
             return AgentAction(agent_name="", action="idle")
 
@@ -973,14 +1030,13 @@ class ValisAgent:
 
     def receive_perception(self, perception: PerceptionData):
         """Called when new perception data arrives from Minecraft."""
-        # Accumulate nearby_chat across overwrites so messages aren't lost
-        # when Java sends multiple perceptions during a long LLM call
-        old = self._pending_perception
-        if old and old.nearby_chat:
-            if perception.nearby_chat:
-                perception.nearby_chat = old.nearby_chat + perception.nearby_chat
-            else:
-                perception.nearby_chat = list(old.nearby_chat)
+        # Accumulate chat into a separate inbox that survives perception overwrites
+        if perception.nearby_chat:
+            self._chat_inbox.extend(perception.nearby_chat)
+            perception.nearby_chat = []
+        # Sync village chest contents from perception into settlement
+        if self.settlement and perception.village_chest:
+            self.settlement.update_chest(perception.village_chest)
         self.perception_processor.update(perception)
         self._pending_perception = perception
         self._perception_event.set()
@@ -1668,11 +1724,12 @@ Respond ONLY with valid JSON:
             elif not parsed:
                 logger.warning(f"Agent {self.name}: could not parse action: '{action_str}'")
 
-            # Step 5b: Social awareness — process heard chat messages
-            if not is_fast_tick and perception.nearby_chat:
+            # Step 5b: Social awareness — drain chat inbox
+            if not is_fast_tick and self._chat_inbox:
                 import re as _re_chat
-                _chat_count = len(perception.nearby_chat)
-                for msg in perception.nearby_chat:
+                _chat_msgs = list(self._chat_inbox)
+                self._chat_inbox.clear()
+                for msg in _chat_msgs:
                     _chat_match = _re_chat.match(r'\[(\w+)\]\s*(.*)', msg)
                     if _chat_match:
                         _sender = _chat_match.group(1)
@@ -1683,8 +1740,11 @@ Respond ONLY with valid JSON:
                                 self._unanalyzed_chat: dict[str, list[str]] = {}
                             self._unanalyzed_chat.setdefault(_sender, []).append(
                                 _chat_match.group(2))
-                logger.debug(f"SOCIAL: {self.name} processed {_chat_count} chat message(s)")
-                perception.nearby_chat = []
+                            # Extract requests for Settlement routing
+                            if self.settlement:
+                                self.settlement.parse_chat_request(
+                                    _sender, _chat_match.group(2))
+                logger.debug(f"SOCIAL: {self.name} processed {len(_chat_msgs)} chat message(s)")
 
                 # Deep LLM analysis every 30 ticks if unanalyzed messages exist
                 if (self.tick_count % 30 == 0
@@ -1751,6 +1811,9 @@ class Settlement:
         self.shelter_positions: list[tuple[int, int, int]] = []
         self.crafting_tables: list[tuple[int, int, int]] = []
         self.agent_status: dict[str, dict] = {}
+        self.village_chest: dict[str, int] = {}
+        self.chest_placed: bool = False
+        self.pending_requests: list[dict] = []  # Chat→Action pipeline
 
     def register_shelter(self, x: int, y: int, z: int) -> bool:
         """Register a shelter. Returns False if a shelter already exists within 8 blocks."""
@@ -1813,7 +1876,23 @@ class Settlement:
         if is_day is not None:
             lines.append(f"Time of day: {'day' if is_day else 'night (hostile mobs spawn)'}.")
 
+        # Village chest contents
+        if self.village_chest:
+            chest_items = ", ".join(f"{v}x {k}" for k, v in
+                sorted(self.village_chest.items(), key=lambda x: -x[1])[:8])
+            lines.append(f"VILLAGE CHEST at center: {chest_items}")
+        elif self.chest_placed:
+            lines.append("VILLAGE CHEST at center: empty")
+
+        # Pending requests from other agents
         import time as _time
+        active_requests = [r for r in self.pending_requests
+                           if r.get("from") != agent_name
+                           and _time.time() - r.get("time", 0) < 300]
+        if active_requests:
+            for req in active_requests[:2]:
+                lines.append(f"REQUEST from {req['from']}: needs {req['item']}.")
+
         others = {n: s for n, s in self.agent_status.items()
                   if n != agent_name and _time.time() - s.get("updated", 0) < 120}
         if others:
@@ -1832,6 +1911,31 @@ class Settlement:
 
         return "\n".join(lines)
 
+    def parse_chat_request(self, sender: str, message: str):
+        """Extract resource requests from chat messages."""
+        import re, time
+        patterns = [
+            r'(?:i )?need\s+(\w+)',
+            r'(?:looking for|searching for)\s+(\w+)',
+            r'(?:anyone have|does anyone have)\s+(\w+)',
+        ]
+        for pat in patterns:
+            m = re.search(pat, message, re.IGNORECASE)
+            if m:
+                item = m.group(1).lower()
+                if item not in ("to", "a", "the", "some", "help", "safety"):
+                    self.pending_requests.append({
+                        "from": sender, "item": item, "time": time.time()})
+                    # Expire old requests
+                    self.pending_requests = [r for r in self.pending_requests
+                                             if time.time() - r.get("time", 0) < 300]
+                    logger.info(f"SETTLEMENT: request from {sender}: needs {item}")
+                    break
+
+    def update_chest(self, contents: dict[str, int]):
+        """Sync chest contents from perception data."""
+        self.village_chest = {k: v for k, v in contents.items() if v > 0}
+
 
 class AgentManager:
     """
@@ -1844,6 +1948,8 @@ class AgentManager:
         self._bridge = None
         self._despawned_recently: set[str] = set()  # Prevent auto-recreate race
         self.settlement = Settlement()
+        self._council_tick: int = 0
+        self._council_running: bool = False
 
     def set_bridge(self, bridge):
         """Set the WebSocket bridge for agent communication."""
@@ -1909,6 +2015,106 @@ class AgentManager:
                         "type": "agent_spawn", "name": name, "personality": entry.personality,
                         "x": entry.offset_x, "y": 64 + entry.offset_y, "z": entry.offset_z,
                     })
+
+        # Place village chest at settlement center
+        if self.settlement.center and not self.settlement.chest_placed and self._bridge:
+            cx, cy, cz = self.settlement.center
+            await self._bridge.send({
+                "type": "place_village_chest", "x": cx, "y": cy, "z": cz,
+            })
+            self.settlement.chest_placed = True
+            logger.info(f"SETTLEMENT: village chest placed at ({cx},{cy},{cz})")
+
+    async def run_village_council(self):
+        """Village Council — a meta-LLM call that assigns tasks to agents.
+
+        Runs every 30 agent-ticks (~60 seconds). Sees all agents' positions,
+        inventories, and settlement state. Outputs role-based task assignments.
+        PIANO-compliant: an LLM decides, not hardcoded logic.
+        """
+        if self._council_running or len(self.agents) < 2:
+            return
+        self._council_running = True
+        try:
+            # Build global state summary
+            agent_summaries = []
+            for name, agent in self.agents.items():
+                p = agent._pending_perception
+                if not p:
+                    continue
+                pos = p.position
+                inv = {k: v for k, v in p.inventory.items() if k != "air" and v > 0}
+                inv_str = ", ".join(f"{v}x {k}" for k, v in
+                    sorted(inv.items(), key=lambda x: -x[1])[:6]) or "empty"
+                dist = 0
+                if self.settlement.center:
+                    import math
+                    cx, _, cz = self.settlement.center
+                    dist = math.sqrt((pos.get("x",0)-cx)**2 + (pos.get("z",0)-cz)**2)
+                agent_summaries.append(
+                    f"- {name} ({agent.personality}): pos=({pos.get('x',0):.0f},{pos.get('y',0):.0f},{pos.get('z',0):.0f}), "
+                    f"{dist:.0f}m from center, inventory=[{inv_str}]"
+                )
+
+            settlement_info = ""
+            s = self.settlement
+            if s.center:
+                cx, cy, cz = s.center
+                chest_str = ", ".join(f"{v}x {k}" for k, v in
+                    sorted(s.village_chest.items(), key=lambda x: -x[1])[:6]) or "empty"
+                settlement_info = (
+                    f"Settlement center: ({cx},{cy},{cz}), {s.shelters_built} shelters.\n"
+                    f"Village chest: {chest_str}"
+                )
+
+            prompt = f"""You are the Village Council — a strategic planner for a Minecraft AI village.
+You see ALL agents and the village state. Assign ONE specific task to each agent based on their role.
+
+AGENTS:
+{chr(10).join(agent_summaries)}
+
+{settlement_info}
+
+RULES:
+- Each agent gets ONE task. Tasks should be specific with coordinates where possible.
+- Agents far from center (>80 blocks) should return to center FIRST, then do their task.
+- Prioritize: 1) Return to center if far away, 2) Deposit surplus into village chest, 3) Role-specific work near center.
+- The gather loop is: go out (max 50 blocks), get resources, RETURN to center, deposit in chest.
+- Miner: gather stone/ores. Builder: build shelters/structures. Explorer: scout nearby (max 50 blocks), report back.
+
+Output ONLY a JSON object mapping agent names to task strings:
+{{"AgentName": "specific task instruction", ...}}"""
+
+            # Use any agent's LLM provider
+            any_agent = next(iter(self.agents.values()))
+            import json, re
+            try:
+                response = await any_agent.llm.chat([
+                    {"role": "system", "content": "You are a village planning AI. Output only JSON."},
+                    {"role": "user", "content": prompt},
+                ])
+                json_str = response.strip()
+                json_str = re.sub(r'^```(?:json)?\s*', '', json_str)
+                json_str = re.sub(r'\s*```$', '', json_str)
+                brace_start = json_str.find('{')
+                brace_end = json_str.rfind('}')
+                if brace_start >= 0 and brace_end > brace_start:
+                    json_str = json_str[brace_start:brace_end + 1]
+                assignments = json.loads(json_str)
+
+                for name, task in assignments.items():
+                    agent = self.agents.get(name)
+                    if agent:
+                        agent._council_assignment = str(task)[:200]
+                        agent._council_tick = agent.tick_count
+                        agent._cached_decision = None  # force fresh controller call
+                logger.info(f"COUNCIL: assigned tasks to {len(assignments)} agents: "
+                           + " | ".join(f"{n}: {t[:60]}" for n, t in assignments.items()))
+            except Exception as e:
+                logger.warning(f"COUNCIL: LLM call failed: {e}")
+
+        finally:
+            self._council_running = False
 
     async def spawn_agent(self, name: str, personality: str = "default",
                           send_spawn_msg: bool = True) -> ValisAgent:
@@ -2032,6 +2238,12 @@ class AgentManager:
                 for i, r in enumerate(results):
                     if isinstance(r, Exception):
                         logger.error(f"Agent tick error: {r}", exc_info=r)
+
+            # Village Council — run every 30 ticks (~60s)
+            self._council_tick += 1
+            if self._council_tick >= 30 and len(self.agents) >= 2:
+                self._council_tick = 0
+                asyncio.create_task(self.run_village_council())
 
             await asyncio.sleep(0.1)  # Small delay to prevent busy-loop
 

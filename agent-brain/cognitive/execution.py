@@ -113,6 +113,12 @@ class Executor:
                 elif action_name in ("give_item", "give") and len(parts) >= 3:
                     params = {"target": parts[0].strip(), "item": parts[1].strip(),
                               "amount": _parse_num(parts[2]) if len(parts) > 2 else 1}
+                elif action_name in ("deposit_chest", "deposit") and len(parts) >= 1:
+                    params = {"item": parts[0].strip(),
+                              "amount": _parse_num(parts[1]) if len(parts) > 1 else 10}
+                elif action_name in ("withdraw_chest", "withdraw") and len(parts) >= 1:
+                    params = {"item": parts[0].strip(),
+                              "amount": _parse_num(parts[1]) if len(parts) > 1 else 10}
 
         # Map action names to Minecraft actions
         action_map = {
@@ -141,6 +147,10 @@ class Executor:
             "craft": "craft",
             "give_item": "give_item",
             "give": "give_item",
+            "deposit_chest": "deposit_chest",
+            "deposit": "deposit_chest",
+            "withdraw_chest": "withdraw_chest",
+            "withdraw": "withdraw_chest",
         }
 
         mapped_action = action_map.get(action_name)

@@ -52,6 +52,8 @@ public class ActionExecutor {
                 case "chat" -> chat(params);
                 case "teleport" -> teleport(params);
                 case "give_item" -> giveItem(params);
+                case "deposit_chest" -> depositChest(params);
+                case "withdraw_chest" -> withdrawChest(params);
                 case "idle" -> idle();
                 default -> {
                     log.warning("Unknown action for " + agent.getAgentName() + ": " + action);
@@ -640,6 +642,92 @@ public class ActionExecutor {
         }
         plugin.getWsBridge().sendActionResult(agent.getAgentName(), "give_item",
                 true, "gave " + amount + "x " + itemName + " to " + targetName);
+    }
+
+    /**
+     * Deposit items into the village chest at settlement center.
+     * If no chest exists, places one automatically.
+     */
+    private void depositChest(JsonObject params) {
+        String itemName = params.has("item") ? params.get("item").getAsString().toLowerCase() : "";
+        int amount = params.has("amount") ? params.get("amount").getAsInt() : 1;
+
+        if (itemName.isEmpty()) {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "deposit_chest",
+                    false, "missing item param");
+            return;
+        }
+
+        Location chestLoc = plugin.getVillageChestLocation();
+        if (chestLoc == null) {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "deposit_chest",
+                    false, "no village chest placed yet");
+            return;
+        }
+
+        double dist = agent.getLocation().distance(chestLoc);
+        if (dist > 6) {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "deposit_chest",
+                    false, "too far from village chest (" + String.format("%.0f", dist) + "m, max 6)");
+            return;
+        }
+
+        int has = agent.getInventory().getOrDefault(itemName, 0);
+        int toDeposit = Math.min(amount, has);
+        if (toDeposit <= 0) {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "deposit_chest",
+                    false, "no " + itemName + " in inventory");
+            return;
+        }
+
+        agent.removeFromInventory(itemName, toDeposit);
+        plugin.depositToVillageChest(itemName, toDeposit);
+        plugin.getWsBridge().sendActionResult(agent.getAgentName(), "deposit_chest",
+                true, "deposited " + toDeposit + "x " + itemName + " into village chest");
+    }
+
+    /**
+     * Withdraw items from the village chest.
+     */
+    private void withdrawChest(JsonObject params) {
+        String itemName = params.has("item") ? params.get("item").getAsString().toLowerCase() : "";
+        int amount = params.has("amount") ? params.get("amount").getAsInt() : 1;
+
+        if (itemName.isEmpty()) {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "withdraw_chest",
+                    false, "missing item param");
+            return;
+        }
+
+        Location chestLoc = plugin.getVillageChestLocation();
+        if (chestLoc == null) {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "withdraw_chest",
+                    false, "no village chest placed yet");
+            return;
+        }
+
+        double dist = agent.getLocation().distance(chestLoc);
+        if (dist > 6) {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "withdraw_chest",
+                    false, "too far from village chest (" + String.format("%.0f", dist) + "m, max 6)");
+            return;
+        }
+
+        int available = plugin.getVillageChestItem(itemName);
+        int toWithdraw = Math.min(amount, available);
+        if (toWithdraw <= 0) {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "withdraw_chest",
+                    false, "village chest has no " + itemName);
+            return;
+        }
+
+        plugin.withdrawFromVillageChest(itemName, toWithdraw);
+        Material mat = Material.matchMaterial(itemName.toUpperCase());
+        if (mat != null) {
+            agent.addToInventory(mat, toWithdraw);
+        }
+        plugin.getWsBridge().sendActionResult(agent.getAgentName(), "withdraw_chest",
+                true, "withdrew " + toWithdraw + "x " + itemName + " from village chest");
     }
 
     /**

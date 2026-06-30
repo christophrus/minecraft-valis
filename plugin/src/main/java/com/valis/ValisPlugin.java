@@ -21,6 +21,10 @@ import org.bukkit.scoreboard.DisplaySlot;
 import org.bukkit.scoreboard.Objective;
 import org.bukkit.scoreboard.Scoreboard;
 
+import org.bukkit.Location;
+import org.bukkit.World;
+import org.bukkit.block.Block;
+
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
@@ -39,6 +43,10 @@ public class ValisPlugin extends JavaPlugin {
     private final Map<String, VirtualAgent> agents = new ConcurrentHashMap<>();
     private final Map<Player, String> spectatingPlayers = new ConcurrentHashMap<>();
     private final Map<Player, Inventory> spectateInventories = new ConcurrentHashMap<>();
+
+    // Village chest — virtual shared storage at settlement center
+    private Location villageChestLocation = null;
+    private final Map<String, Integer> villageChest = new ConcurrentHashMap<>();
 
     @Override
     public void onEnable() {
@@ -270,5 +278,39 @@ public class ValisPlugin extends JavaPlugin {
 
     private static String truncate(String s, int max) {
         return s.length() > max ? s.substring(0, max) + "…" : s;
+    }
+
+    // --- Village Chest API ---
+
+    public Location getVillageChestLocation() { return villageChestLocation; }
+
+    public void setVillageChestLocation(Location loc) {
+        this.villageChestLocation = loc;
+        // Place a physical chest block in the world
+        Block block = loc.getBlock();
+        if (block.getType() != Material.CHEST) {
+            block.setType(Material.CHEST);
+        }
+        log.info("Village chest placed at " + loc.getBlockX() + "," + loc.getBlockY() + "," + loc.getBlockZ());
+    }
+
+    public void depositToVillageChest(String item, int amount) {
+        villageChest.merge(item.toLowerCase(), amount, Integer::sum);
+    }
+
+    public void withdrawFromVillageChest(String item, int amount) {
+        String key = item.toLowerCase();
+        int current = villageChest.getOrDefault(key, 0);
+        int remaining = current - amount;
+        if (remaining <= 0) villageChest.remove(key);
+        else villageChest.put(key, remaining);
+    }
+
+    public int getVillageChestItem(String item) {
+        return villageChest.getOrDefault(item.toLowerCase(), 0);
+    }
+
+    public Map<String, Integer> getVillageChestContents() {
+        return Map.copyOf(villageChest);
     }
 }
