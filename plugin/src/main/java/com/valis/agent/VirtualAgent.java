@@ -193,15 +193,10 @@ public class VirtualAgent {
                 loc.getWorld().getPlayers().forEach(player ->
                     player.sendMessage("§7[§b" + name + "§7]§f " + text)
                 );
-                // Deliver to nearby NPC agents so they can "hear" it
-                int hearRange = 30;
+                // Deliver to all other NPC agents so they can "hear" it
                 for (VirtualAgent other : plugin.getAgents().values()) {
-                    if (other == this || other.npc == null || !other.npc.isSpawned()) continue;
-                    var otherLoc = other.npc.getStoredLocation();
-                    if (otherLoc != null && otherLoc.getWorld() == loc.getWorld()
-                            && otherLoc.distance(loc) <= hearRange) {
-                        other.hearChat(name, text);
-                    }
+                    if (other == this) continue;
+                    other.hearChat(name, text);
                 }
             }
         }
