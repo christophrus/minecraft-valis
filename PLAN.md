@@ -9,6 +9,35 @@
 
 ---
 
+## Milestone — Emergent Civilization Loop (2026-07-01)
+
+**Multi-Agent ist live.** 3 personalisierte Agenten (MinerBob, BuilderAlice, ScoutCarol) mit Traits und Rollen kooperieren über eine geteilte Ökonomie. In einem mehrstündigen Lauf (session 20260630-231553, ~4h, 979 Ticks) hat sich der vollständige Zivilisations-Kreislauf geschlossen:
+
+> **Village Council** weist rollenbasierte Aufgaben zu → Agent **sammelt** Holz/Stein → **deponiert** in den geteilten Dorf-Chest → anderer Agent **entnimmt** Planks und **baut** ein Shelter.
+
+Messbare Ergebnisse in diesem Lauf:
+
+| Metrik | Ergebnis |
+|--------|----------|
+| Baumstämme gesammelt | 30 (oak + cherry) |
+| Tech-Tree | Holz → Werkzeuge (4× Pickaxe, Schwert, Axt) → **Stein + Eisen** |
+| Platzierte Blöcke | **166** (dirt, planks, cobblestone, torch) |
+| Gebaute Shelter | **8 registriert** (u.a. eines vom LLM selbst designt) |
+| Chest-Ökonomie | 60 Deposits + 17 Withdrawals |
+| Council-Sessions | 32 |
+
+**Der Weg dorthin — drei Kernbefunde:** Das PIANO-Hirn war nie der Engpass. Die Blocker waren jedes Mal der *mechanische Untergrund*, der die vom LLM bereits gefassten Absichten ins Leere laufen ließ:
+
+1. **Perception-Blindheit** — die 80-Block-Wahrnehmung füllte sich mit Dirt/Stone, bevor ein Log/Erz erreicht wurde. → Split in 60 reguläre + 20 High-Value-Slots (Logs/Ores immer sichtbar).
+2. **Vergrabener Chest** — Center/Chest hartcodiert auf y=64, Agenten stehen aber auf y=78-Hügeloberfläche → Chest 14 Blöcke unter der Erde, unerreichbar. → Plugin snapt den Chest auf die echte Oberfläche (`getHighestBlockYAt`) und meldet die Position zurück; das Hirn synct den Center.
+3. **Leash Catch-22** — die einzigen Bäume liegen 70+ Blöcke entfernt in Bergen; der feste 60-Block-Leash zog leerhändige Agenten zurück, *bevor* sie in Sichtweite eines Baums kamen. → Adaptiver Leash: 110 Blöcke solange leerhändig sammelnd, 60 sobald Beute getragen wird (dann heimkehren).
+
+Alle drei Fixes sind PIANO-konform: reine Wahrnehmungs-/Navigations-Mechanik, keine Entscheidungs-Overrides.
+
+**Verbleibende Rauheiten (Feinschliff, keine Blocker):** Churn (Agenten minen gelegentlich eigene Crafting-Tables/Chests wieder ab), gelegentlich kaputtes Blueprint-JSON vom LLM, Shelter sind funktionale 3×3-Hütten statt Mehrraum-Strukturen, ~25 Deposit-Fails/Lauf verbleiben.
+
+---
+
 ## Architecture Review (2026-06-25)
 
 ### Generative Agents (Park et al. 2023): Paper vs Implementation
@@ -201,20 +230,21 @@ minecraft-valis/
 11. ✅ Skill Execution — 9 Aktionstypen (move_to, mine_block, place_block, craft auto-chain, attack_mob, collect_items, equip, teleport, idle). Tool-aware Mining. Block-Breaking Animation.
 12. ✅ Agent loop — perceive → controller → plan → reflect → execute; LLM-first mit Fast-Path nur für Notfälle
 
-### Phase 3: PIANO Enhancements (Project Sid) 🟡 55%
+### Phase 3: PIANO Enhancements (Project Sid) 🟡 65%
 13. 🟡 Concurrent module execution — asyncio-Struktur vorhanden, Module aber sequentiell gepollt (Paper: parallel auf verschiedenen Zeitskalen)
 14. ✅ Cognitive Controller — Bottleneck mit gewichtetem Retrieval + Reflections + Plan-Kontext; Fast-Path auf Notfälle reduziert
 15. ✅ Action Awareness — compare expected vs actual outcomes, blacklist repeat failures
-16. 🟡 Social Awareness — directed sentiment graph (Skeleton, ungenutzt — single agent)
-17. 🟡 Goal Generation — 2 Zieltypen (economic, survival); **fehlt**: soziale Ziele basierend auf Beobachtung anderer Agenten
+16. 🟡 Social Awareness — Agenten hören + verarbeiten Chat aller anderen (`nearby_chat`), Chat→Action-Pipeline routet Requests; **fehlt**: gerichteter Sentiment-Graph, Beziehungsdynamik
+17. 🟡 Goal Generation — economic + survival + Council-Assignments; **fehlt**: eigenständig generierte soziale Ziele aus Beobachtung anderer
 
-### Phase 4: Multi-Agent Civilization 🔲 0%
-18. 🔲 Personality & Trait system
-19. 🔲 Multi-agent orchestration (2–100 agents)
-20. 🔲 Role specialization (professions: lumberjack, miner, builder, farmer)
-21. 🔲 Collective rule system (constitution, voting, taxation)
+### Phase 4: Multi-Agent Civilization 🟡 45%
+18. ✅ Personality & Trait system — `spawn_roster.yaml` / `agents.yaml`: Traits + initial_goals pro Agent (determined/creative/adventurous …)
+19. ✅ Multi-agent orchestration — 3 Agenten laufen parallel, je eigener Cognitive Loop; `AgentManager` + `reconcile_roster`
+20. ✅ Role specialization — Miner / Builder / Explorer, config-getrieben (noch nicht emergent aus sozialen Zielen)
+21. 🟡 Collective coordination — **Village Council**: Meta-LLM weist alle ~30 Ticks strategische, rollenbasierte Aufgaben zu (PIANO-konform, sieht globalen State); **fehlt**: Verfassung, Abstimmung, Steuern
 22. 🔲 Cultural transmission (memes, religion, values)
-23. 🔲 Economy system (trade, currency, marketplaces)
+23. 🟡 Economy system — **geteilter Dorf-Chest**: deposit/withdraw, Round-Trip-Missionen, Chat→Action-Requests; funktionierender Sammel→Teilen→Bauen-Loop; **fehlt**: Währung, Handel, Marktplätze
+24. ✅ Emergent building — **LLM-Blueprint-System**: Agenten entwerfen eigene Gebäude aus verfügbarem Material (`_generate_blueprint`); Fallback auf 3×3-Shelter; 8 Shelter in einem Lauf gebaut
 
 ### Phase 5: Observability & Polish 🟡 30%
 24. 🔲 Web dashboard
@@ -227,7 +257,7 @@ minecraft-valis/
 - **Phase 1**: ✅ Server starts, plugin loads, WebSocket connects, single NPC spawns
 - **Phase 2**: ✅ Paper-konforme Kernarchitektur: LLM Importance-Scoring, gewichtetes Retrieval (recency×relevance×importance), LLM-Reflection mit Focal Points, hierarchisches Planning; 🟡 fehlt: reaktives Umplanen
 - **Phase 3**: 🟡 CC mit Retrieval+Reflections+Plan; Fast-Path auf Notfälle reduziert; SocialAwareness ungenutzt (Single-Agent); Module sequentiell statt parallel
-- **Phase 4**: 🔲 2+ agents coexist, specialize in roles, participate in governance, propagate culture
+- **Phase 4**: 🟡 3 Agenten koexistieren, spezialisieren in Rollen, kooperieren über geteilte Ökonomie + Village Council, bauen 8 Shelter (Sammel→Teilen→Bauen-Loop validiert); 🔲 offen: Governance (Verfassung/Voting), Cultural Transmission, Währung
 - **Phase 5**: 🟡 Debug logs comprehensive; dashboard/config pending
 
 ## Beyond Plan — Additional Features Built
@@ -252,6 +282,19 @@ During Phase 2/3 implementation, several unplanned but necessary features were a
 | **Block-Breaking Animation** | ProtocolLib stages 0-9 over ~1s with NMS packet construction | Visual Feedback |
 | **STUCK-ESCAPE Teleport** | Teleports agent out of stuck position when all else fails | Error Recovery |
 | **Craft→Idle Deadlock Detection** | Detects 3× craft→idle loops, clears craft cooldowns | Reflex Tuning |
+
+### Multi-Agent & Civilization Features (2026-06-30 → 07-01)
+
+| Feature | Purpose | Paper Reference |
+|---------|---------|----------------|
+| **Village Council** | Meta-LLM sieht globalen State, weist alle ~30 Ticks rollenbasierte Aufgaben zu | Collective Rules (Sid) |
+| **Shared Village Chest** | Geteilte Ökonomie: deposit/withdraw; auf echte Oberfläche gesnapt | Economy (Sid) |
+| **Round-Trip Missions** | Adaptiver Leash (110 leerhändig / 60 mit Beute) — sammeln fern, heimbringen | Goal Generation |
+| **Chat→Action Pipeline** | Settlement parst Chat ("I need cobblestone") und routet Requests an andere Agenten | Talking Module (Sid) |
+| **LLM Blueprint System** | Agenten entwerfen eigene Gebäude aus verfügbarem Material (statt fixem Muster) | Skill Execution / Emergence |
+| **Split Perception Cap** | 60 reguläre + 20 High-Value-Slots — Logs/Ores nie von Dirt verdrängt | Observation Filter (GA) |
+| **Surface-Snapped Chest** | `getHighestBlockYAt` verhindert vergrabenen, unerreichbaren Chest | Infrastructure |
+| **Settlement State** | Geteilter Center/Status/Chest/Requests über alle Agenten | Collective Memory |
 
 ## Excluded Scope (Future)
 
