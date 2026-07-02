@@ -39,6 +39,9 @@ except ImportError:
 
 logger = logging.getLogger("valis.agent")
 
+# Population cap — protects LLM budget while allowing council-driven growth
+MAX_VILLAGERS = 6
+
 
 @dataclass
 class AgentConfig:
@@ -2053,6 +2056,38 @@ class Settlement:
         self.village_chest: dict[str, int] = {}
         self.chest_placed: bool = False
         self.pending_requests: list[dict] = []  # Chat→Action pipeline
+        # Village chronicle — persistent history written by the council.
+        # Survives restarts; gives the civilization a memory of itself.
+        self.chronicle: list[str] = []
+        self._chronicle_path = os.path.join("data", "village_chronicle.md")
+        self._load_chronicle()
+
+    def _load_chronicle(self):
+        """Load past chronicle entries so history survives brain restarts."""
+        try:
+            with open(self._chronicle_path, "r", encoding="utf-8") as f:
+                self.chronicle = [line.lstrip("- ").strip() for line in f
+                                  if line.strip().startswith("-")]
+            if self.chronicle:
+                logger.info(f"CHRONICLE: loaded {len(self.chronicle)} entries of village history")
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            logger.warning(f"CHRONICLE: load failed: {e}")
+
+    def append_chronicle(self, entry: str):
+        """Record one line of village history (written by the council LLM)."""
+        entry = " ".join(str(entry).split())[:250]
+        if not entry or (self.chronicle and self.chronicle[-1] == entry):
+            return
+        self.chronicle.append(entry)
+        try:
+            os.makedirs(os.path.dirname(self._chronicle_path), exist_ok=True)
+            with open(self._chronicle_path, "a", encoding="utf-8") as f:
+                f.write(f"- {entry}\n")
+        except Exception as e:
+            logger.warning(f"CHRONICLE: persist failed: {e}")
+        logger.info(f"CHRONICLE: {entry}")
 
     def register_shelter(self, x: int, y: int, z: int) -> bool:
         """Register a shelter. Returns False if a shelter already exists within 8 blocks."""
@@ -2122,6 +2157,10 @@ class Settlement:
             lines.append(f"VILLAGE CHEST at center: {chest_items}")
         elif self.chest_placed:
             lines.append("VILLAGE CHEST at center: empty")
+
+        # Village history — shared cultural memory, written by the council
+        if self.chronicle:
+            lines.append("VILLAGE HISTORY: " + " | ".join(self.chronicle[-2:]))
 
         # Pending requests from other agents
         import time as _time
@@ -2303,7 +2342,23 @@ class AgentManager:
                     sorted(s.village_chest.items(), key=lambda x: -x[1])[:6]) or "empty"
                 settlement_info = (
                     f"Settlement center: ({cx},{cy},{cz}), {s.shelters_built} shelters.\n"
-                    f"Village chest: {chest_str}"
+                    f"Village chest: {chest_str}\n"
+                    f"Population: {len(self.agents)} villagers (capacity: {MAX_VILLAGERS})."
+                )
+
+            history_info = ""
+            if s.chronicle:
+                history_info = "VILLAGE HISTORY (chronicle so far):\n" + "\n".join(
+                    f"- {e}" for e in s.chronicle[-5:])
+
+            recruit_info = ""
+            if len(self.agents) < MAX_VILLAGERS:
+                recruit_info = (
+                    'Optional: if the village is thriving (shelters built, surplus in the chest) '
+                    'and would benefit from another member, you MAY add a "RECRUIT" key: '
+                    '{"name": "UniqueName", "role": "farmer|guard|trader|artist|priest|miner|builder|explorer", '
+                    '"reason": "one sentence why the village needs them"}. '
+                    'Recruit only when the village can support a new member — not every session.'
                 )
 
             prompt = f"""You are the Village Council — a strategic planner for a Minecraft AI village.
@@ -2314,15 +2369,19 @@ AGENTS:
 
 {settlement_info}
 
+{history_info}
+
 RULES:
 - Each agent gets ONE task. Tasks should be specific with coordinates where possible.
 - Agents far from center (>80 blocks) should return to center FIRST, then do their task.
 - Prioritize: 1) Return to center if far away, 2) Deposit surplus into village chest, 3) Role-specific work near center.
 - The gather loop is: go out (max 50 blocks), get resources, RETURN to center, deposit in chest.
 - Miner: gather stone/ores. Builder: build shelters/structures. Explorer: scout nearby (max 50 blocks), report back.
+- Also add a "CHRONICLE" key: ONE sentence recording the most notable village development since the last entry (for the village history book). Skip it if nothing noteworthy happened.
+{recruit_info}
 
 Output ONLY a JSON object mapping agent names to task strings:
-{{"AgentName": "specific task instruction", ...}}"""
+{{"AgentName": "specific task instruction", ..., "CHRONICLE": "optional history sentence"}}"""
 
             # Use any agent's LLM provider
             any_agent = next(iter(self.agents.values()))
@@ -2341,6 +2400,26 @@ Output ONLY a JSON object mapping agent names to task strings:
                     json_str = json_str[brace_start:brace_end + 1]
                 assignments = json.loads(json_str)
 
+                # Chronicle — the council records village history (persistent)
+                chronicle_entry = assignments.pop("CHRONICLE", None)
+                if chronicle_entry and isinstance(chronicle_entry, str):
+                    self.settlement.append_chronicle(chronicle_entry)
+
+                # Recruitment — the council may grow the village when it thrives
+                recruit = assignments.pop("RECRUIT", None)
+                if recruit and isinstance(recruit, dict) and len(self.agents) < MAX_VILLAGERS:
+                    rname = re.sub(r'[^A-Za-z0-9_]', '', str(recruit.get("name", "")))[:16]
+                    rrole = str(recruit.get("role", "default")).lower().strip() or "default"
+                    rreason = " ".join(str(recruit.get("reason", "")).split())[:150]
+                    if rname and rname not in self.agents:
+                        logger.info(f"COUNCIL: recruiting new villager {rname} ({rrole}): {rreason}")
+                        new_agent = await self.spawn_agent(rname, rrole)
+                        if rreason:
+                            new_agent.goals.insert(0, f"[Founding purpose] {rreason}")
+                        self.settlement.append_chronicle(
+                            f"{rname} joined the village as {rrole}" +
+                            (f" — {rreason}" if rreason else ""))
+
                 for name, task in assignments.items():
                     agent = self.agents.get(name)
                     if agent:
@@ -2348,7 +2427,7 @@ Output ONLY a JSON object mapping agent names to task strings:
                         agent._council_tick = agent.tick_count
                         agent._cached_decision = None  # force fresh controller call
                 logger.info(f"COUNCIL: assigned tasks to {len(assignments)} agents: "
-                           + " | ".join(f"{n}: {t[:60]}" for n, t in assignments.items()))
+                           + " | ".join(f"{n}: {str(t)[:60]}" for n, t in assignments.items()))
             except Exception as e:
                 logger.warning(f"COUNCIL: LLM call failed: {e}")
 
@@ -2389,9 +2468,17 @@ Output ONLY a JSON object mapping agent names to task strings:
         self.agents[name] = agent
         await agent.start()
 
-        # Send agent_spawn back to Minecraft to create the NPC
+        # Send agent_spawn back to Minecraft to create the NPC.
+        # Spawn at the settlement center (surface-synced) when one exists —
+        # new recruits should appear in the village, not at world origin.
         if self._bridge and send_spawn_msg:
-            await self._bridge.send({"type": "agent_spawn", "name": name, "personality": personality, "x": 0, "y": 64, "z": 0})
+            sx, sy, sz = (0, 64, 0)
+            if self.settlement.center:
+                cx, cy, cz = self.settlement.center
+                import random as _r
+                sx, sy, sz = cx + _r.randint(-2, 2), cy, cz + _r.randint(-2, 2)
+            await self._bridge.send({"type": "agent_spawn", "name": name,
+                                     "personality": personality, "x": sx, "y": sy, "z": sz})
 
         logger.info(f"Agent spawned: {name} ({personality}, traits={traits}). Total agents: {len(self.agents)}")
         return agent

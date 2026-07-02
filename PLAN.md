@@ -242,9 +242,10 @@ minecraft-valis/
 19. ✅ Multi-agent orchestration — 3 Agenten laufen parallel, je eigener Cognitive Loop; `AgentManager` + `reconcile_roster`
 20. ✅ Role specialization — Miner / Builder / Explorer, config-getrieben (noch nicht emergent aus sozialen Zielen)
 21. 🟡 Collective coordination — **Village Council**: Meta-LLM weist alle ~30 Ticks strategische, rollenbasierte Aufgaben zu (PIANO-konform, sieht globalen State); **fehlt**: Verfassung, Abstimmung, Steuern
-22. 🔲 Cultural transmission (memes, religion, values)
+22. 🟡 Cultural transmission — **Dorf-Chronik**: der Council schreibt persistente Geschichte (`data/village_chronicle.md`, überlebt Neustarts); die letzten Einträge fließen in jeden Agenten-Prompt als geteiltes kulturelles Gedächtnis; **fehlt**: Memes, Religion, Werte-Propagation zwischen Agenten
 23. 🟡 Economy system — **geteilter Dorf-Chest**: deposit/withdraw, Round-Trip-Missionen, Chat→Action-Requests; funktionierender Sammel→Teilen→Bauen-Loop; **fehlt**: Währung, Handel, Marktplätze
 24. ✅ Emergent building — **LLM-Blueprint-System**: Agenten entwerfen eigene Gebäude aus verfügbarem Material (`_generate_blueprint`); Fallback auf 3×3-Shelter; 8 Shelter in einem Lauf gebaut
+25. ✅ Population growth — der Council darf bei florierendem Dorf **neue Dorfbewohner rekrutieren** (`RECRUIT`): Name, Rolle (farmer/guard/trader/artist/priest/…) und Gründungszweck vom LLM erfunden; Spawn am Dorfzentrum; Cap `MAX_VILLAGERS=6`; jede Rekrutierung wird in der Chronik verewigt
 
 ### Phase 5: Observability & Polish 🟡 30%
 24. 🔲 Web dashboard
@@ -295,6 +296,8 @@ During Phase 2/3 implementation, several unplanned but necessary features were a
 | **Split Perception Cap** | 60 reguläre + 20 High-Value-Slots — Logs/Ores nie von Dirt verdrängt | Observation Filter (GA) |
 | **Surface-Snapped Chest** | `getHighestBlockYAt` verhindert vergrabenen, unerreichbaren Chest | Infrastructure |
 | **Settlement State** | Geteilter Center/Status/Chest/Requests über alle Agenten | Collective Memory |
+| **Village Chronicle** | Persistente Dorfgeschichte, vom Council-LLM geschrieben, überlebt Neustarts, in jedem Agenten-Prompt | Cultural Transmission (Sid) |
+| **Council Recruitment** | LLM entscheidet, wann das Dorf wächst — erfindet Name, Rolle, Gründungszweck neuer Bewohner | Civilization Growth (Sid) |
 
 ## Excluded Scope (Future)
 
