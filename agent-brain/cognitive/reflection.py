@@ -79,6 +79,11 @@ class Reflection:
                     evidence_ids=[m.node_id for m in memories],
                 )
                 logger.info(f"REFLECTION: stored insight (imp={importance:.2f}): {insight[:100]}")
+                # High-importance insights become personal convictions (beliefs) —
+                # the seed of culture. Capped; weakest belief is replaced.
+                if importance >= 0.55 and hasattr(agent, "adopt_belief"):
+                    agent.adopt_belief(insight, source="own reflection",
+                                       importance=importance)
 
         self.importance_counter = 0
         self.reflection_count += 1

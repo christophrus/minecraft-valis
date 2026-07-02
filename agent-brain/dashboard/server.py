@@ -77,6 +77,8 @@ def _agent_snapshot(agent) -> dict:
         "council_assignment": getattr(agent, "_council_assignment", "") or "",
         "current_task": getattr(agent.planner, "current_task", "") or "",
         "goals": list(agent.goals[:3]),
+        "beliefs": [{"text": b.get("text", ""), "source": b.get("source", "")}
+                    for b in (getattr(agent, "beliefs", None) or [])],
     }
 
 
@@ -89,6 +91,7 @@ def build_state(manager) -> dict:
         "crafting_tables": [list(x) for x in s.crafting_tables],
         "chest": dict(s.village_chest),
         "chronicle": list(s.chronicle),
+        "rules": list(getattr(s, "rules", [])),
         "pending_requests": [
             {"from": r.get("from", "?"), "item": r.get("item", "?")}
             for r in s.pending_requests

@@ -130,8 +130,19 @@
   </div>
   <div>
     <div class="panel">
+      <h2>🗺️ Dorfkarte</h2>
+      <canvas id="map" width="348" height="300" style="width:100%;border-radius:6px;background:#0a0e14;"></canvas>
+      <div class="stat" style="margin-top:6px;font-size:11px;">
+        ● Agent &nbsp; ■ Shelter &nbsp; <span style="color:var(--amber)">◆</span> Zentrum/Chest &nbsp; ▪ Crafting-Table
+      </div>
+    </div>
+    <div class="panel">
       <h2>📜 Dorf-Chronik</h2>
       <div id="chronicle"><div class="empty">Die Geschichte beginnt erst…</div></div>
+    </div>
+    <div class="panel">
+      <h2>⚖️ Dorfregeln</h2>
+      <div id="rules"><div class="empty">Noch keine Gesetze beschlossen.</div></div>
     </div>
     <div class="panel">
       <h2>Dorf-Chest</h2>
@@ -190,9 +201,79 @@ function renderAgents(agents) {
       <div class="intent"><span class="hint">${esc(a.action_hint || "…")}</span>${esc(a.intent || "wartet auf Entscheidung")}</div>
       ${a.reason ? `<div class="reason">„${esc(a.reason)}"</div>` : ""}
       ${a.council_assignment ? `<div class="council">⚖️ ${esc(a.council_assignment)}</div>` : ""}
+      ${(a.beliefs || []).map(b => `<div class="reason" style="color:var(--purple)">✨ ${esc(b.text)}${b.source && b.source !== "own reflection" ? ` <span style="opacity:.6">(${esc(b.source)})</span>` : ""}</div>`).join("")}
       <div class="chips">${inv}</div>
     </div>`;
   }).join("");
+}
+
+const AGENT_COLORS = ["#58a6ff", "#3fb950", "#f85149", "#d29922", "#bc8cff", "#39c5cf"];
+
+function renderMap(s) {
+  const cv = document.getElementById("map");
+  const ctx = cv.getContext("2d");
+  ctx.clearRect(0, 0, cv.width, cv.height);
+
+  // Collect all points to determine bounds
+  const pts = [];
+  s.agents.forEach(a => { if (a.position.x !== undefined) pts.push([a.position.x, a.position.z]); });
+  s.settlement.shelter_positions.forEach(p => pts.push([p[0], p[2]]));
+  s.settlement.crafting_tables.forEach(p => pts.push([p[0], p[2]]));
+  if (s.settlement.center) pts.push([s.settlement.center[0], s.settlement.center[2]]);
+  if (!pts.length) {
+    ctx.fillStyle = "#8b949e"; ctx.font = "12px sans-serif";
+    ctx.fillText("Keine Positionsdaten", 110, 150);
+    return;
+  }
+  let minX = Math.min(...pts.map(p => p[0])) - 12, maxX = Math.max(...pts.map(p => p[0])) + 12;
+  let minZ = Math.min(...pts.map(p => p[1])) - 12, maxZ = Math.max(...pts.map(p => p[1])) + 12;
+  // Keep aspect ratio square-ish
+  const span = Math.max(maxX - minX, maxZ - minZ, 60);
+  const cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2;
+  minX = cx - span / 2; maxX = cx + span / 2;
+  minZ = cz - span / 2; maxZ = cz + span / 2;
+  const sx = x => ((x - minX) / (maxX - minX)) * (cv.width - 20) + 10;
+  const sz = z => ((z - minZ) / (maxZ - minZ)) * (cv.height - 20) + 10;
+
+  // Grid lines every 20 blocks
+  ctx.strokeStyle = "#1c2330"; ctx.lineWidth = 1;
+  for (let gx = Math.ceil(minX / 20) * 20; gx <= maxX; gx += 20) {
+    ctx.beginPath(); ctx.moveTo(sx(gx), 0); ctx.lineTo(sx(gx), cv.height); ctx.stroke();
+  }
+  for (let gz = Math.ceil(minZ / 20) * 20; gz <= maxZ; gz += 20) {
+    ctx.beginPath(); ctx.moveTo(0, sz(gz)); ctx.lineTo(cv.width, sz(gz)); ctx.stroke();
+  }
+
+  // Crafting tables (small brown squares)
+  ctx.fillStyle = "#a06b3c";
+  s.settlement.crafting_tables.forEach(p => ctx.fillRect(sx(p[0]) - 2, sz(p[2]) - 2, 4, 4));
+
+  // Shelters (green squares)
+  ctx.fillStyle = "#2ea04366";
+  ctx.strokeStyle = "#3fb950";
+  s.settlement.shelter_positions.forEach(p => {
+    ctx.fillRect(sx(p[0]) - 5, sz(p[2]) - 5, 10, 10);
+    ctx.strokeRect(sx(p[0]) - 5, sz(p[2]) - 5, 10, 10);
+  });
+
+  // Center/chest (gold diamond)
+  if (s.settlement.center) {
+    const x = sx(s.settlement.center[0]), z = sz(s.settlement.center[2]);
+    ctx.fillStyle = "#d29922";
+    ctx.beginPath();
+    ctx.moveTo(x, z - 6); ctx.lineTo(x + 6, z); ctx.lineTo(x, z + 6); ctx.lineTo(x - 6, z);
+    ctx.closePath(); ctx.fill();
+  }
+
+  // Agents (colored dots + names)
+  ctx.font = "10px sans-serif";
+  s.agents.forEach((a, i) => {
+    if (a.position.x === undefined) return;
+    const x = sx(a.position.x), z = sz(a.position.z);
+    ctx.fillStyle = AGENT_COLORS[i % AGENT_COLORS.length];
+    ctx.beginPath(); ctx.arc(x, z, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.fillText(a.name, x + 6, z + 3);
+  });
 }
 
 function render(s) {
@@ -205,6 +286,12 @@ function render(s) {
   }
   renderAgents(s.agents);
   renderFeed(s.events);
+  renderMap(s);
+
+  const rules = document.getElementById("rules");
+  rules.innerHTML = (s.settlement.rules && s.settlement.rules.length)
+    ? s.settlement.rules.map(r => `<div class="entry" style="border-left:2px solid var(--amber);padding:6px 0 6px 12px;margin-bottom:6px;font-size:13px;">${esc(r)}</div>`).join("")
+    : '<div class="empty">Noch keine Gesetze beschlossen.</div>';
 
   const chr = document.getElementById("chronicle");
   chr.innerHTML = s.settlement.chronicle.length

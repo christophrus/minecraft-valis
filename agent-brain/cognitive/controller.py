@@ -129,6 +129,12 @@ class CognitiveController:
                 f"ROLE FOCUS: {focus}\n"
                 f"Bias decisions toward your role. Only deviate when survival demands it.\n"
             )
+        beliefs = getattr(agent, 'beliefs', None) or []
+        if beliefs:
+            belief_lines = "; ".join(b["text"][:100] for b in beliefs[:3])
+            personality_block += (
+                f"YOUR CONVICTIONS (let them shape your choices and words): {belief_lines}\n"
+            )
 
         # Settlement context — shared village state (neutral info, LLM decides)
         settlement_block = ""
@@ -199,10 +205,12 @@ RELEVANT MEMORIES (weighted by importance+recency+relevance):
 {reflection_text}
 {discrepancy_text}
 
-action_hint choices: mine|craft|place|build|move|explore|hunt|socialize|give|deposit|withdraw|rest
+action_hint choices: mine|craft|smelt|place|build|till|move|explore|hunt|socialize|give|deposit|withdraw|rest
 
 To craft: use action_hint "craft" and specify the item name in intent. Only craft items listed in CAN CRAFT NOW.
 To get missing materials: mine or gather what ALMOST CRAFTABLE shows.
+To smelt ores into ingots (raw_iron→iron_ingot, raw_copper→copper_ingot) or cook food: use action_hint "smelt", specify "smelt [item] [amount]" in intent. Needs a furnace (in inventory or nearby) and coal as fuel.
+To farm: use action_hint "till" with coordinates of dirt/grass in intent to create farmland (needs a hoe). Then place wheat_seeds on the farmland. Mine mature WHEAT to harvest. Craft bread from 3 wheat.
 To build a shelter: use action_hint "build". The agent will construct a 3x3 shelter automatically.
 To give items to another agent: use action_hint "give" and specify "give [item] to [AgentName]" in intent. You must be near the target agent.
 To deposit surplus items into the village chest: use action_hint "deposit" and specify "deposit [item] [amount]" in intent. You must be near the settlement center.

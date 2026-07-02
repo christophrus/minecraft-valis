@@ -305,7 +305,8 @@ public class WorldObserver {
         Material.DIAMOND_ORE, Material.LAPIS_ORE, Material.REDSTONE_ORE,
         Material.DEEPSLATE_COAL_ORE, Material.DEEPSLATE_IRON_ORE, Material.DEEPSLATE_COPPER_ORE,
         Material.DEEPSLATE_GOLD_ORE, Material.DEEPSLATE_DIAMOND_ORE,
-        Material.CRAFTING_TABLE, Material.FURNACE, Material.CHEST
+        Material.CRAFTING_TABLE, Material.FURNACE, Material.CHEST,
+        Material.WHEAT, Material.FARMLAND, Material.CARROTS, Material.POTATOES
     );
 
     private JsonArray observeBlocks(Location loc, World world) {

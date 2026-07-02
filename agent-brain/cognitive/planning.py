@@ -79,10 +79,11 @@ Recent memories:
 Your current goals:
 {chr(10).join(f'- {g}' for g in goals)}
 
-Generate a daily plan with 3-5 high-level goals, each decomposed into 2-3 concrete sub-tasks.
+Generate a daily plan with 3-4 high-level goals, each decomposed into 2-3 concrete sub-tasks.
 Use exact coordinates from "Nearby blocks" when possible.
 Use "Biomes in the distance" to decide WHERE to explore.
 Use "CAN CRAFT NOW" and "ALMOST CRAFTABLE" to drive tech progression: include concrete steps to gather the missing materials for ALMOST CRAFTABLE upgrades and advance your tools to the next tier (wood → stone → iron) instead of repeating items you already own.
+Keep each sub-task to ONE short line. Maximum 12 sub-tasks total.
 
 Format:
 ## Goal 1: <high-level goal>

@@ -146,7 +146,53 @@ class ValisAgent:
         self._council_assignment: str = ""
         self._council_tick: int = 0
 
+        # Personal convictions — the atoms of culture. Formed by own reflections,
+        # adoptable from other agents' chat (with attribution).
+        self.beliefs: list[dict] = []  # {"text", "source", "importance"}
+
         logger.info(f"Agent created: {self.name} ({self.personality}) [{self.agent_id}]")
+
+    def adopt_belief(self, text: str, source: str, importance: float = 0.6):
+        """Add a conviction (max 3 — the weakest gets replaced)."""
+        text = " ".join(str(text).split())[:200]
+        if not text or any(b["text"] == text for b in self.beliefs):
+            return
+        self.beliefs.append({"text": text, "source": source, "importance": importance})
+        self.beliefs.sort(key=lambda b: -b["importance"])
+        dropped = self.beliefs[3:]
+        self.beliefs = self.beliefs[:3]
+        origin = "formed own" if source == "own reflection" else f"adopted ({source})"
+        logger.info(f"CULTURE: {self.name} {origin} belief: {text[:90]}")
+        if dropped:
+            logger.debug(f"CULTURE: {self.name} outgrew belief: {dropped[0]['text'][:60]}")
+
+    async def _consider_belief_adoption(self, sender: str, statement: str):
+        """LLM decides whether a heard conviction resonates enough to adopt.
+        PIANO-pure: hearing is mechanical, adoption is a cognitive decision."""
+        try:
+            own = "; ".join(b["text"][:80] for b in self.beliefs) or "none yet"
+            response = await self.llm.chat([
+                {"role": "system",
+                 "content": "You decide if a heard idea becomes one of your personal "
+                            "convictions. Answer ONLY YES or NO with one short reason."},
+                {"role": "user",
+                 "content": f"You are {self.name}, a {self.personality} "
+                            f"(traits: {', '.join(self.traits) or 'none'}).\n"
+                            f"Your current convictions: {own}\n"
+                            f"{sender} said: \"{statement}\"\n"
+                            f"Does this idea resonate with who you are — enough to "
+                            f"adopt it as your own conviction?"},
+            ])
+            if response.strip().upper().startswith("YES"):
+                self.adopt_belief(statement, source=f"adopted from {sender}",
+                                  importance=0.55)
+                await self.memory.add_event(
+                    content=f"[Culture] I adopted a conviction from {sender}: {statement}",
+                    importance=0.7,
+                    subject=self.name, predicate="adopted belief from", object=sender,
+                )
+        except Exception as e:
+            logger.debug(f"CULTURE: belief adoption check failed: {e}")
 
     # --- Public API ---
 
@@ -323,6 +369,32 @@ class ValisAgent:
             if "stick" not in self._recently_crafted:
                 craft_action = AgentAction(agent_name="", action="craft", params={"item": "stick"})
                 logger.debug(f"FAST-CRAFT: top-up sticks for axe (planks={total_planks})")
+        # Furnace: gateway to the iron age. 8 cobblestone, needs table.
+        elif (inv.get("furnace", 0) == 0 and inv.get("cobblestone", 0) >= 8
+              and has_crafting_table_nearby
+              and not any(b.get("type","").upper() in ("FURNACE","BLAST_FURNACE")
+                          and abs(b.get("x",0)-px) <= 4 and abs(b.get("z",0)-pz) <= 4
+                          for b in blocks)):
+            if "furnace" not in self._recently_crafted:
+                craft_action = AgentAction(agent_name="", action="craft", params={"item": "furnace"})
+                logger.debug(f"FAST-CRAFT: pre-emptive CRAFT furnace (cobblestone={inv.get('cobblestone',0)})")
+
+        # Pre-emptive smelting: raw ore + furnace + coal → ingots (same exception
+        # category as pre-emptive crafting — pure tech-tree progression).
+        if craft_action is None:
+            has_furnace_access = (inv.get("furnace", 0) >= 1
+                or any(b.get("type","").upper() in ("FURNACE","BLAST_FURNACE")
+                       and abs(b.get("x",0)-px) <= 4 and abs(b.get("y",0)-py) <= 2
+                       and abs(b.get("z",0)-pz) <= 4 for b in blocks))
+            fuel = inv.get("coal", 0) + inv.get("charcoal", 0)
+            if has_furnace_access and fuel >= 1:
+                for raw in ("raw_iron", "raw_copper", "raw_gold"):
+                    n = inv.get(raw, 0)
+                    if n >= 1 and f"smelt:{raw}" not in self._recently_crafted:
+                        self._recently_crafted[f"smelt:{raw}"] = now
+                        logger.debug(f"FAST-SMELT: pre-emptive SMELT {n}x {raw} (fuel={fuel})")
+                        return AgentAction(agent_name="", action="smelt",
+                                           params={"item": raw, "amount": min(n, 8)})
 
         if craft_action:
             item = craft_action.params.get("item", "")
@@ -378,6 +450,24 @@ class ValisAgent:
         # and the agent idles for 15 seconds before retrying
         self._recently_crafted = {k: v for k, v in self._recently_crafted.items() if now - v < 5}
         def pos_key(b): return f"{b.get('x',0)},{b.get('y',0)},{b.get('z',0)}"
+
+        # Village infrastructure protection: heuristic mining must never target
+        # blocks the village registered (crafting tables, chest, shelters). The
+        # LLM can still explicitly order it via intent coords — this only guards
+        # the reflex paths that pick "nearest minable block".
+        _INFRA_TYPES = frozenset({"CRAFTING_TABLE", "CHEST", "FURNACE", "TORCH",
+                                  "WHEAT", "FARMLAND", "CARROTS", "POTATOES", "BEETROOTS"})
+        def is_protected(b) -> bool:
+            btype = b.get("type", "").upper()
+            if btype in _INFRA_TYPES:
+                return True
+            if not self.settlement:
+                return False
+            bx, by, bz = b.get("x", 0), b.get("y", 0), b.get("z", 0)
+            for sx, sy, sz in self.settlement.shelter_positions:
+                if abs(bx - sx) <= 2 and abs(by - sy) <= 3 and abs(bz - sz) <= 2:
+                    return True
+            return False
 
         # --- PRE-EMPTIVE CRAFTING + TABLE PLACEMENT (extracted, runs every tick) ---
         fast_craft = self._try_fast_craft(perception)
@@ -495,6 +585,7 @@ class ValisAgent:
                     minable_nearby = [b for b in blocks
                                     if b.get("type","").upper() not in ("AIR","CAVE_AIR","VOID_AIR","BEDROCK","WATER","LAVA")
                                     and "_LEAVES" not in b.get("type","").upper()
+                                    and not is_protected(b)
                                     and pos_key(b) not in self._recently_mined
                                     and abs(b.get("x",0)-px) <= 4 and abs(b.get("y",0)-py) <= 4
                                     and abs(b.get("z",0)-pz) <= 4]
@@ -803,6 +894,7 @@ class ValisAgent:
                                    ("OAK_LOG","BIRCH_LOG","SPRUCE_LOG","JUNGLE_LOG","ACACIA_LOG",
                                     "DARK_OAK_LOG","CHERRY_LOG","MANGROVE_LOG","COAL_ORE",
                                     "IRON_ORE","COPPER_ORE")
+                                   and not is_protected(b)
                                    and abs(b.get("x",0)-px) <= 4 and abs(b.get("z",0)-pz) <= 4
                                    and b.get("y",0) <= py + 2
                                    and pos_key(b) not in self._recently_mined]
@@ -834,6 +926,7 @@ class ValisAgent:
                               if b.get("type","").upper() in
                               ("OAK_LOG","BIRCH_LOG","SPRUCE_LOG","JUNGLE_LOG","ACACIA_LOG",
                                "DARK_OAK_LOG","CHERRY_LOG","MANGROVE_LOG")
+                              and not is_protected(b)
                               and b.get("y", 0) <= py + 2
                               and pos_key(b) not in self._recently_mined]
                 if wood_nearby:
@@ -864,6 +957,7 @@ class ValisAgent:
                 minable = [b for b in blocks
                           if b.get("type","").upper() not in ("AIR","CAVE_AIR","VOID_AIR","BEDROCK","WATER","LAVA","CRAFTING_TABLE")
                           and "_LEAVES" not in b.get("type","").upper()
+                          and not is_protected(b)
                           and pos_key(b) not in self._recently_mined]
                 close_minable = [b for b in minable
                                 if abs(b.get("x",0)-px) <= 4 and abs(b.get("y",0)-py) <= 4
@@ -1087,6 +1181,35 @@ class ValisAgent:
                             return AgentAction(agent_name="", action="move_to",
                                 params={"x": cx, "y": cy, "z": cz})
 
+        if hint == "smelt":
+            smelt_match = re.search(r'smelt\s+(\w+)\s*(\d+)?', intent, re.IGNORECASE)
+            if smelt_match:
+                item = smelt_match.group(1).lower()
+                amount = int(smelt_match.group(2)) if smelt_match.group(2) else 8
+                if perception.inventory.get(item, 0) > 0:
+                    return AgentAction(agent_name="", action="smelt",
+                                       params={"item": item, "amount": amount})
+
+        if hint == "till":
+            # Till the coordinates from intent, or the nearest dirt/grass at feet level
+            if intent_coords:
+                ix, iy, iz = int(intent_coords[0][0]), int(intent_coords[0][1]), int(intent_coords[0][2])
+                if abs(ix - px) <= 4 and abs(iz - pz) <= 4:
+                    return AgentAction(agent_name="", action="till",
+                                       params={"x": ix, "y": iy, "z": iz})
+                else:
+                    return AgentAction(agent_name="", action="move_to",
+                                       params={"x": ix, "y": iy, "z": iz})
+            tillable = [b for b in blocks
+                        if b.get("type","").upper() in ("DIRT","GRASS_BLOCK")
+                        and abs(b.get("x",0)-px) <= 4 and abs(b.get("z",0)-pz) <= 4
+                        and abs(b.get("y",0)-py) <= 1]
+            if tillable:
+                t = min(tillable, key=lambda b: abs(b.get("x",0)-px) + abs(b.get("z",0)-pz))
+                return AgentAction(agent_name="", action="till",
+                                   params={"x": int(t.get("x",px)), "y": int(t.get("y",py)),
+                                           "z": int(t.get("z",pz))})
+
         if hint == "withdraw":
             withdraw_match = re.search(r'withdraw\s+(\w+)\s*(\d+)?', intent, re.IGNORECASE)
             if withdraw_match:
@@ -1184,6 +1307,22 @@ class ValisAgent:
 
         # Track repeated failures to avoid retrying the same broken action
         if not result.success:
+            # Chest and smelt failures are TRANSIENT (chest contents and distance
+            # change constantly) — a session blacklist would permanently disable
+            # the village economy over a temporary condition. Feed the fact into
+            # memory instead and let the LLM adapt.
+            if result.action in ("deposit_chest", "withdraw_chest", "smelt"):
+                await self.memory.add_event(
+                    content=f"[{result.action} failed] {result.details}",
+                    importance=0.4,
+                    subject=self.name, predicate="failed", object=result.action,
+                )
+                self._cached_decision = None  # re-decide with fresh context
+                logger.debug(f"CHEST-SOFT-FAIL: {result.action}: {result.details} (no blacklist)")
+                self._action_result_ready = True
+                self._perception_event.set()
+                logger.info(f"Agent {self.name} action result: {result.action} -> FAIL: {result.details}")
+                return
             fail_key = f"{result.action}:{result.details.split(' ')[-1] if result.details else 'unknown'}"
             # For place_block failures, track the material (e.g. "place:stick")
             if "not a placeable block" in (result.details or ""):
@@ -1986,7 +2125,28 @@ Output ONLY a JSON array of block placements, sorted bottom-up:
                             if self.settlement:
                                 self.settlement.parse_chat_request(
                                     _sender, _chat_match.group(2))
+                            # Cultural transmission: conviction-like statements
+                            # become adoption candidates (LLM decides later)
+                            _text = _chat_match.group(2)
+                            if _re_chat.search(
+                                    r"i believe|i've learned|i think we should|"
+                                    r"our village should|always remember", _text,
+                                    _re_chat.IGNORECASE):
+                                if not hasattr(self, '_belief_candidates'):
+                                    self._belief_candidates: list[tuple[str, str]] = []
+                                self._belief_candidates.append((_sender, _text[:200]))
                 logger.debug(f"SOCIAL: {self.name} processed {len(_chat_msgs)} chat message(s)")
+
+                # Cultural transmission: consider adopting a heard conviction.
+                # One LLM call, rate-limited to every ~2 minutes per agent.
+                import time as _t_cult
+                if (getattr(self, '_belief_candidates', None)
+                        and _t_cult.time() - getattr(self, '_last_belief_check', 0) > 120):
+                    self._last_belief_check = _t_cult.time()
+                    _cand_sender, _cand_text = self._belief_candidates.pop(0)
+                    self._belief_candidates = self._belief_candidates[-3:]
+                    asyncio.create_task(
+                        self._consider_belief_adoption(_cand_sender, _cand_text))
 
                 # Deep LLM analysis every 30 ticks if unanalyzed messages exist
                 if (self.tick_count % 30 == 0
@@ -2056,11 +2216,50 @@ class Settlement:
         self.village_chest: dict[str, int] = {}
         self.chest_placed: bool = False
         self.pending_requests: list[dict] = []  # Chat→Action pipeline
+        self.pending_trades: list[dict] = []  # trade offers heard in chat
         # Village chronicle — persistent history written by the council.
         # Survives restarts; gives the civilization a memory of itself.
         self.chronicle: list[str] = []
         self._chronicle_path = os.path.join("data", "village_chronicle.md")
         self._load_chronicle()
+        # Village rules — adopted by majority vote (governance)
+        self.rules: list[str] = []
+        self._state_path = os.path.join("data", "settlement_state.json")
+        self._load_state()
+
+    def _load_state(self):
+        """Restore settlement infrastructure so the village survives brain restarts."""
+        import json
+        try:
+            with open(self._state_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self.shelter_positions = [tuple(p) for p in data.get("shelter_positions", [])]
+            self.shelters_built = len(self.shelter_positions)
+            self.crafting_tables = [tuple(p) for p in data.get("crafting_tables", [])]
+            self.rules = list(data.get("rules", []))
+            if data.get("center"):
+                self.center = tuple(data["center"])
+            logger.info(f"SETTLEMENT: restored state — {self.shelters_built} shelter(s), "
+                        f"{len(self.crafting_tables)} table(s), {len(self.rules)} rule(s)")
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            logger.warning(f"SETTLEMENT: state load failed: {e}")
+
+    def save_state(self):
+        """Persist settlement infrastructure to disk."""
+        import json
+        try:
+            os.makedirs(os.path.dirname(self._state_path), exist_ok=True)
+            with open(self._state_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "center": list(self.center) if self.center else None,
+                    "shelter_positions": [list(p) for p in self.shelter_positions],
+                    "crafting_tables": [list(p) for p in self.crafting_tables],
+                    "rules": self.rules,
+                }, f, indent=1)
+        except Exception as e:
+            logger.warning(f"SETTLEMENT: state save failed: {e}")
 
     def _load_chronicle(self):
         """Load past chronicle entries so history survives brain restarts."""
@@ -2102,6 +2301,7 @@ class Settlement:
         self.shelter_positions.append((x, y, z))
         self.shelters_built = len(self.shelter_positions)
         logger.info(f"SETTLEMENT: shelter #{self.shelters_built} at ({x},{y},{z})")
+        self.save_state()
         return True
 
     def register_crafting_table(self, x: int, y: int, z: int):
@@ -2109,6 +2309,7 @@ class Settlement:
         if pos not in self.crafting_tables:
             self.crafting_tables.append(pos)
             logger.info(f"SETTLEMENT: crafting table registered at ({x},{y},{z})")
+            self.save_state()
 
     def update_agent_status(self, name: str, personality: str, intent: str,
                             inventory: dict[str, int],
@@ -2158,6 +2359,19 @@ class Settlement:
         elif self.chest_placed:
             lines.append("VILLAGE CHEST at center: empty")
 
+        # Food stock — neutral fact so agents/council can judge food security
+        _FOOD = ("bread", "cooked_beef", "cooked_porkchop", "cooked_chicken",
+                 "cooked_mutton", "cooked_cod", "cooked_salmon", "baked_potato",
+                 "apple", "carrot", "wheat")
+        food_total = sum(self.village_chest.get(f, 0) for f in _FOOD)
+        lines.append(f"VILLAGE FOOD STOCK: {food_total} item(s) in chest."
+                     + (" The village has no food reserve." if food_total == 0 else ""))
+
+        # Village rules — laws adopted by majority vote; every villager knows them
+        if self.rules:
+            lines.append("VILLAGE RULES (adopted by vote): "
+                         + " | ".join(self.rules[-4:]))
+
         # Village history — shared cultural memory, written by the council
         if self.chronicle:
             lines.append("VILLAGE HISTORY: " + " | ".join(self.chronicle[-2:]))
@@ -2170,6 +2384,24 @@ class Settlement:
         if active_requests:
             for req in active_requests[:2]:
                 lines.append(f"REQUEST from {req['from']}: needs {req['item']}.")
+
+        # Open trade offers — the LLM decides whether a deal is worth accepting
+        self.pending_trades = [t for t in self.pending_trades
+                               if _time.time() - t.get("time", 0) < 300]
+        offers = [t for t in self.pending_trades if t.get("from") != agent_name]
+        for t in offers[:2]:
+            lines.append(
+                f"TRADE OFFER from {t['from']}: gives {t['gives_amount']}x {t['gives']} "
+                f"for {t['wants_amount']}x {t['wants']}. If you have {t['wants']} and want "
+                f"the deal, move next to {t['from']} and use action_hint 'give' "
+                f"(\"give {t['wants']} to {t['from']}\").")
+        # Remind the offerer of their own promise so they reciprocate
+        own = [t for t in self.pending_trades if t.get("from") == agent_name]
+        for t in own[:1]:
+            lines.append(
+                f"YOUR OPEN TRADE OFFER: you promised {t['gives_amount']}x {t['gives']} "
+                f"for {t['wants_amount']}x {t['wants']}. If someone gives you {t['wants']}, "
+                f"give them the promised {t['gives']} in return.")
 
         others = {n: s for n, s in self.agent_status.items()
                   if n != agent_name and _time.time() - s.get("updated", 0) < 120}
@@ -2190,8 +2422,32 @@ class Settlement:
         return "\n".join(lines)
 
     def parse_chat_request(self, sender: str, message: str):
-        """Extract resource requests from chat messages."""
+        """Extract resource requests and trade offers from chat messages."""
         import re, time
+
+        # Trade offers: "trade [my] copper for [your] planks", "offer X for Y",
+        # "would you trade X for Y". Stored so nearby agents get the offer as an
+        # explicit fact and their LLM can decide to accept via the give action.
+        trade_m = re.search(
+            r'(?:trade|offer|exchange|swap)\s+(?:my\s+|some\s+)?(\d+)?\s*(\w+)\s+for\s+(?:your\s+|some\s+)?(\d+)?\s*(\w+)',
+            message, re.IGNORECASE)
+        if trade_m:
+            give_amt = int(trade_m.group(1)) if trade_m.group(1) else 5
+            give_item = trade_m.group(2).lower()
+            want_amt = int(trade_m.group(3)) if trade_m.group(3) else 5
+            want_item = trade_m.group(4).lower()
+            _stop = ("to", "a", "the", "some", "it", "them", "me", "you")
+            if give_item not in _stop and want_item not in _stop:
+                # Replace older offer from the same sender
+                self.pending_trades = [t for t in getattr(self, 'pending_trades', [])
+                                       if t.get("from") != sender]
+                self.pending_trades.append({
+                    "from": sender, "gives": give_item, "gives_amount": give_amt,
+                    "wants": want_item, "wants_amount": want_amt, "time": time.time()})
+                logger.info(f"SETTLEMENT: trade offer from {sender}: "
+                            f"{give_amt}x {give_item} for {want_amt}x {want_item}")
+                return
+
         patterns = [
             r'(?:i )?need\s+(\w+)',
             r'(?:looking for|searching for)\s+(\w+)',
@@ -2350,6 +2606,9 @@ class AgentManager:
             if s.chronicle:
                 history_info = "VILLAGE HISTORY (chronicle so far):\n" + "\n".join(
                     f"- {e}" for e in s.chronicle[-5:])
+            if s.rules:
+                history_info += "\nVILLAGE RULES (adopted by vote):\n" + "\n".join(
+                    f"- {r}" for r in s.rules)
 
             recruit_info = ""
             if len(self.agents) < MAX_VILLAGERS:
@@ -2378,6 +2637,7 @@ RULES:
 - The gather loop is: go out (max 50 blocks), get resources, RETURN to center, deposit in chest.
 - Miner: gather stone/ores. Builder: build shelters/structures. Explorer: scout nearby (max 50 blocks), report back.
 - Also add a "CHRONICLE" key: ONE sentence recording the most notable village development since the last entry (for the village history book). Skip it if nothing noteworthy happened.
+- Optional: if the village faces a recurring coordination problem, you MAY add a "PROPOSAL" key with ONE short village rule to vote on (e.g. "Always deposit surplus ore in the chest before nightfall"). The villagers will vote; a majority adopts it as law. Propose rarely — only when a real problem needs a rule.
 {recruit_info}
 
 Output ONLY a JSON object mapping agent names to task strings:
@@ -2404,6 +2664,11 @@ Output ONLY a JSON object mapping agent names to task strings:
                 chronicle_entry = assignments.pop("CHRONICLE", None)
                 if chronicle_entry and isinstance(chronicle_entry, str):
                     self.settlement.append_chronicle(chronicle_entry)
+
+                # Governance — a proposed rule goes to a village-wide vote
+                proposal = assignments.pop("PROPOSAL", None)
+                if proposal and isinstance(proposal, str) and len(self.settlement.rules) < 8:
+                    asyncio.create_task(self.run_village_vote(proposal.strip()[:200]))
 
                 # Recruitment — the council may grow the village when it thrives
                 recruit = assignments.pop("RECRUIT", None)
@@ -2433,6 +2698,63 @@ Output ONLY a JSON object mapping agent names to task strings:
 
         finally:
             self._council_running = False
+
+    async def run_village_vote(self, proposal: str):
+        """Village-wide vote on a council proposal. Each agent's own LLM votes
+        based on its personality and goals — democracy, PIANO-style. A majority
+        adopts the rule permanently (persisted, in every prompt from then on).
+        """
+        if getattr(self, '_vote_running', False) or len(self.agents) < 2:
+            return
+        self._vote_running = True
+        try:
+            logger.info(f"VOTE: village votes on proposal: {proposal}")
+            votes: dict[str, bool] = {}
+            for name, agent in list(self.agents.items()):
+                try:
+                    response = await agent.llm.chat([
+                        {"role": "system",
+                         "content": "You are a Minecraft villager voting on a village rule. "
+                                    "Answer ONLY with YES or NO followed by one short reason."},
+                        {"role": "user",
+                         "content": f"You are {name}, a {agent.personality} "
+                                    f"(traits: {', '.join(agent.traits) or 'none'}). "
+                                    f"Your goals: {'; '.join(agent.goals[:2]) or 'survive'}.\n"
+                                    f"Proposed village rule: \"{proposal}\"\n"
+                                    f"Existing rules: {'; '.join(self.settlement.rules) or 'none'}\n"
+                                    f"Vote YES or NO."},
+                    ])
+                    vote_yes = response.strip().upper().startswith("YES")
+                    votes[name] = vote_yes
+                    logger.info(f"VOTE: {name} votes {'YES' if vote_yes else 'NO'} — {response.strip()[:80]}")
+                except Exception as e:
+                    logger.warning(f"VOTE: {name} could not vote: {e}")
+            if not votes:
+                return
+            yes = sum(1 for v in votes.values() if v)
+            adopted = yes > len(votes) / 2
+            result_str = f"{yes}/{len(votes)} voted yes"
+            if adopted:
+                self.settlement.rules.append(proposal)
+                self.settlement.save_state()
+                self.settlement.append_chronicle(
+                    f"The village adopted a new rule by vote ({result_str}): {proposal}")
+                logger.info(f"VOTE: ADOPTED ({result_str}): {proposal}")
+            else:
+                self.settlement.append_chronicle(
+                    f"A proposed rule was rejected by vote ({result_str}): {proposal}")
+                logger.info(f"VOTE: REJECTED ({result_str}): {proposal}")
+            # Every agent remembers the vote
+            for name, agent in list(self.agents.items()):
+                await agent.memory.add_event(
+                    content=f"[Village vote] Proposal '{proposal}' was "
+                            f"{'ADOPTED' if adopted else 'rejected'} ({result_str}). "
+                            f"I voted {'YES' if votes.get(name) else 'NO'}.",
+                    importance=0.7,
+                    subject=name, predicate="voted", object=proposal[:80],
+                )
+        finally:
+            self._vote_running = False
 
     async def spawn_agent(self, name: str, personality: str = "default",
                           send_spawn_msg: bool = True) -> ValisAgent:

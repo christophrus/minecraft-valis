@@ -61,28 +61,44 @@ class PerceptionProcessor:
             hints = ", ".join(f"{d}: {b}" for d, b in p.nearby_biomes.items())
             lines.append(f"Biomes in the distance: {hints}.")
 
-        # Nearby blocks — send many, prioritize wood/ores/crafting materials
+        # Nearby blocks — valuable/actionable blocks keep individual coordinates,
+        # commodity blocks (dirt, grass, stone...) are grouped by type with a count
+        # and the nearest coordinate. Cuts prompt tokens ~50% with no information
+        # the LLM actually acts on lost.
         if p.nearby_blocks:
-            # Prioritize: wood/logs first, then ores, then everything else
             wood_keywords = ("_LOG", "_WOOD", "_PLANKS")
             ore_keywords = ("COAL", "IRON", "GOLD", "DIAMOND", "COPPER", "EMERALD", "REDSTONE", "LAPIS")
+            special = ("CRAFTING_TABLE", "FURNACE", "CHEST", "WHEAT", "FARMLAND",
+                       "CARROTS", "POTATOES", "WATER", "LAVA")
+            px = p.position.get("x", 0)
+            py = p.position.get("y", 0)
+            pz = p.position.get("z", 0)
+
+            def _dist(b):
+                return (abs(b.get("x", 0) - px) + abs(b.get("y", 0) - py)
+                        + abs(b.get("z", 0) - pz))
+
             priority = []
-            rest = []
+            grouped: dict[str, list] = {}
             for b in p.nearby_blocks:
                 btype = str(b.get("type", "")).upper()
-                if any(k in btype for k in wood_keywords):
-                    priority.append(b)
-                elif any(k in btype for k in ore_keywords):
+                if (any(k in btype for k in wood_keywords)
+                        or any(k in btype for k in ore_keywords)
+                        or btype in special):
                     priority.append(b)
                 else:
-                    rest.append(b)
-            # Wood/ores first, then fill up to 40 with rest
-            sorted_blocks = priority + rest
+                    grouped.setdefault(btype, []).append(b)
+
             block_descs = []
-            for b in sorted_blocks[:40]:
-                btype = b.get("type", "?")
-                bx, by, bz = b.get("x", 0), b.get("y", 0), b.get("z", 0)
-                block_descs.append(f"{btype}({bx},{by},{bz})")
+            for b in sorted(priority, key=_dist)[:20]:
+                block_descs.append(f"{b.get('type','?')}({b.get('x',0)},{b.get('y',0)},{b.get('z',0)})")
+            for btype, bs in sorted(grouped.items(), key=lambda kv: -len(kv[1]))[:8]:
+                nearest = min(bs, key=_dist)
+                if len(bs) == 1:
+                    block_descs.append(f"{btype}({nearest.get('x',0)},{nearest.get('y',0)},{nearest.get('z',0)})")
+                else:
+                    block_descs.append(
+                        f"{btype} x{len(bs)} (nearest {nearest.get('x',0)},{nearest.get('y',0)},{nearest.get('z',0)})")
             lines.append(f"Nearby blocks: {', '.join(block_descs)}.")
 
         # Nearby entities

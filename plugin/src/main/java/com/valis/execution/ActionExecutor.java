@@ -47,6 +47,8 @@ public class ActionExecutor {
                 case "mine_block" -> mineBlock(params);
                 case "place_block" -> placeBlock(params);
                 case "craft" -> craft(params);
+                case "smelt" -> smelt(params);
+                case "till" -> till(params);
                 case "equip" -> equip(params);
                 case "look_at" -> lookAt(params);
                 case "chat" -> chat(params);
@@ -379,6 +381,30 @@ public class ActionExecutor {
             return;
         }
 
+        // Planting: seed items become crop blocks, but only on farmland
+        java.util.Map<String, Material> cropMap = java.util.Map.of(
+                "wheat_seeds", Material.WHEAT,
+                "carrot", Material.CARROTS,
+                "potato", Material.POTATOES,
+                "beetroot_seeds", Material.BEETROOTS);
+        if (cropMap.containsKey(blockType.toLowerCase())) {
+            Block below = world.getBlockAt(x, y - 1, z);
+            if (below.getType() != Material.FARMLAND) {
+                plugin.getWsBridge().sendActionResult(agent.getAgentName(), "place_block",
+                        false, "can only plant " + blockType + " on farmland (till dirt first)");
+                return;
+            }
+            if (!agent.removeFromInventory(blockType.toLowerCase(), 1)) {
+                plugin.getWsBridge().sendActionResult(agent.getAgentName(), "place_block",
+                        false, "missing " + blockType + " in inventory");
+                return;
+            }
+            block.setType(cropMap.get(blockType.toLowerCase()));
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "place_block",
+                    true, "planted " + blockType + " at " + x + "," + y + "," + z);
+            return;
+        }
+
         try {
             Material mat = Material.valueOf(blockType.toUpperCase());
             if (!mat.isBlock()) {
@@ -648,6 +674,131 @@ public class ActionExecutor {
      * Deposit items into the village chest at settlement center.
      * If no chest exists, places one automatically.
      */
+    /** Smeltable inputs → outputs (vanilla furnace recipes, simplified). */
+    private static final java.util.Map<String, String> SMELT_MAP = java.util.Map.ofEntries(
+            java.util.Map.entry("raw_iron", "iron_ingot"),
+            java.util.Map.entry("iron_ore", "iron_ingot"),
+            java.util.Map.entry("deepslate_iron_ore", "iron_ingot"),
+            java.util.Map.entry("raw_copper", "copper_ingot"),
+            java.util.Map.entry("copper_ore", "copper_ingot"),
+            java.util.Map.entry("deepslate_copper_ore", "copper_ingot"),
+            java.util.Map.entry("raw_gold", "gold_ingot"),
+            java.util.Map.entry("gold_ore", "gold_ingot"),
+            java.util.Map.entry("sand", "glass"),
+            java.util.Map.entry("cobblestone", "stone"),
+            java.util.Map.entry("clay_ball", "brick"),
+            java.util.Map.entry("beef", "cooked_beef"),
+            java.util.Map.entry("porkchop", "cooked_porkchop"),
+            java.util.Map.entry("chicken", "cooked_chicken"),
+            java.util.Map.entry("mutton", "cooked_mutton"),
+            java.util.Map.entry("cod", "cooked_cod"),
+            java.util.Map.entry("salmon", "cooked_salmon"),
+            java.util.Map.entry("potato", "baked_potato"),
+            java.util.Map.entry("kelp", "dried_kelp")
+    );
+
+    /**
+     * Smelt items in a furnace. Requires a furnace (in inventory or placed within
+     * 4 blocks) and fuel (1 coal/charcoal per 8 items). Instant, like craft().
+     */
+    private void smelt(JsonObject params) {
+        String itemName = params.has("item") ? params.get("item").getAsString().toLowerCase().trim() : "";
+        int amount = params.has("amount") ? params.get("amount").getAsInt() : 1;
+        amount = Math.max(1, Math.min(amount, 16));
+
+        String output = SMELT_MAP.get(itemName);
+        if (output == null) {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "smelt",
+                    false, "cannot smelt " + itemName);
+            return;
+        }
+
+        // Furnace requirement: in inventory or placed nearby
+        boolean hasFurnace = agent.getInventory().getOrDefault("furnace", 0) > 0;
+        if (!hasFurnace) {
+            Location loc = agent.getLocation();
+            World world = loc.getWorld();
+            outer:
+            for (int dx = -4; dx <= 4 && world != null; dx++) {
+                for (int dy = -2; dy <= 2; dy++) {
+                    for (int dz = -4; dz <= 4; dz++) {
+                        Material m = world.getBlockAt(loc.getBlockX() + dx,
+                                loc.getBlockY() + dy, loc.getBlockZ() + dz).getType();
+                        if (m == Material.FURNACE || m == Material.BLAST_FURNACE) {
+                            hasFurnace = true;
+                            break outer;
+                        }
+                    }
+                }
+            }
+        }
+        if (!hasFurnace) {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "smelt",
+                    false, "need a furnace (craft one from 8 cobblestone)");
+            return;
+        }
+
+        int has = agent.getInventory().getOrDefault(itemName, 0);
+        int toSmelt = Math.min(amount, has);
+        if (toSmelt <= 0) {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "smelt",
+                    false, "no " + itemName + " in inventory");
+            return;
+        }
+
+        // Fuel: 1 coal or charcoal per 8 items (rounded up)
+        int fuelNeeded = (toSmelt + 7) / 8;
+        int coal = agent.getInventory().getOrDefault("coal", 0);
+        int charcoal = agent.getInventory().getOrDefault("charcoal", 0);
+        if (coal + charcoal < fuelNeeded) {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "smelt",
+                    false, "need " + fuelNeeded + " coal as fuel (have " + (coal + charcoal) + ")");
+            return;
+        }
+        int useCoal = Math.min(coal, fuelNeeded);
+        if (useCoal > 0) agent.removeFromInventory("coal", useCoal);
+        if (fuelNeeded - useCoal > 0) agent.removeFromInventory("charcoal", fuelNeeded - useCoal);
+
+        agent.removeFromInventory(itemName, toSmelt);
+        Material outMat = Material.matchMaterial(output.toUpperCase());
+        if (outMat != null) agent.addToInventory(outMat, toSmelt);
+        plugin.getWsBridge().sendActionResult(agent.getAgentName(), "smelt",
+                true, "smelted " + toSmelt + "x " + itemName + " into " + toSmelt + "x " + output);
+    }
+
+    /**
+     * Till dirt/grass into farmland. Requires a hoe in inventory.
+     */
+    private void till(JsonObject params) {
+        if (!params.has("x") || !params.has("y") || !params.has("z")) {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "till",
+                    false, "missing params (need x, y, z)");
+            return;
+        }
+        boolean hasHoe = agent.getInventory().keySet().stream().anyMatch(k -> k.endsWith("_hoe"));
+        if (!hasHoe) {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "till",
+                    false, "need a hoe to till (craft wooden_hoe)");
+            return;
+        }
+        int x = (int) params.get("x").getAsDouble();
+        int y = (int) params.get("y").getAsDouble();
+        int z = (int) params.get("z").getAsDouble();
+        World world = agent.getLocation().getWorld();
+        if (world == null) return;
+        Block block = world.getBlockAt(x, y, z);
+        Material t = block.getType();
+        if (t != Material.DIRT && t != Material.GRASS_BLOCK && t != Material.COARSE_DIRT
+                && t != Material.DIRT_PATH) {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "till",
+                    false, "cannot till " + t.name() + " (need dirt or grass)");
+            return;
+        }
+        block.setType(Material.FARMLAND);
+        plugin.getWsBridge().sendActionResult(agent.getAgentName(), "till",
+                true, "tilled farmland at " + x + "," + y + "," + z);
+    }
+
     private void depositChest(JsonObject params) {
         String itemName = params.has("item") ? params.get("item").getAsString().toLowerCase() : "";
         int amount = params.has("amount") ? params.get("amount").getAsInt() : 1;

@@ -110,6 +110,12 @@ class Executor:
                     params = {"message": params_str}
                 elif action_name in ("craft",):
                     params = {"item": parts[0].strip()}
+                elif action_name in ("smelt", "cook") and len(parts) >= 1:
+                    params = {"item": parts[0].strip(),
+                              "amount": _parse_num(parts[1]) if len(parts) > 1 else 8}
+                elif action_name == "till" and len(parts) >= 3:
+                    params = {"x": _parse_num(parts[0]), "y": _parse_num(parts[1]),
+                              "z": _parse_num(parts[2])}
                 elif action_name in ("give_item", "give") and len(parts) >= 3:
                     params = {"target": parts[0].strip(), "item": parts[1].strip(),
                               "amount": _parse_num(parts[2]) if len(parts) > 2 else 1}
@@ -151,6 +157,9 @@ class Executor:
             "deposit": "deposit_chest",
             "withdraw_chest": "withdraw_chest",
             "withdraw": "withdraw_chest",
+            "smelt": "smelt",
+            "cook": "smelt",
+            "till": "till",
         }
 
         mapped_action = action_map.get(action_name)
