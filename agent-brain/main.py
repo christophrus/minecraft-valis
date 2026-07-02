@@ -108,6 +108,16 @@ async def main():
     # Start agent tick loop FIRST (before blocking connect)
     tick_task = asyncio.create_task(manager.run_tick_loop())
 
+    # Web dashboard — live view of agents, settlement, chronicle, events
+    dash_host = os.getenv("VALIS_DASHBOARD_HOST", "127.0.0.1")
+    dash_port = int(os.getenv("VALIS_DASHBOARD_PORT", "8765"))
+    dashboard_task = None
+    try:
+        from dashboard.server import run_dashboard
+        dashboard_task = asyncio.create_task(run_dashboard(manager, dash_host, dash_port))
+    except Exception as e:
+        logger.warning(f"Dashboard failed to start (continuing without): {e}")
+
     # Roster reconciliation fires on every (re)connect — creates brain-side agents,
     # waits for perception, only spawns NPCs that don't exist yet.
     bridge.set_on_connected(manager.reconcile_roster)
@@ -118,6 +128,8 @@ async def main():
     except asyncio.CancelledError:
         logger.info("WebSocket connection cancelled")
         tick_task.cancel()
+        if dashboard_task:
+            dashboard_task.cancel()
         return
 
     # Handle shutdown gracefully
@@ -140,6 +152,8 @@ async def main():
         pass
     finally:
         tick_task.cancel()
+        if dashboard_task:
+            dashboard_task.cancel()
         try:
             await bridge.disconnect()
         except Exception:

@@ -247,8 +247,8 @@ minecraft-valis/
 24. ✅ Emergent building — **LLM-Blueprint-System**: Agenten entwerfen eigene Gebäude aus verfügbarem Material (`_generate_blueprint`); Fallback auf 3×3-Shelter; 8 Shelter in einem Lauf gebaut
 25. ✅ Population growth — der Council darf bei florierendem Dorf **neue Dorfbewohner rekrutieren** (`RECRUIT`): Name, Rolle (farmer/guard/trader/artist/priest/…) und Gründungszweck vom LLM erfunden; Spawn am Dorfzentrum; Cap `MAX_VILLAGERS=6`; jede Rekrutierung wird in der Chronik verewigt
 
-### Phase 5: Observability & Polish 🟡 30%
-24. 🔲 Web dashboard
+### Phase 5: Observability & Polish 🟡 60%
+24. ✅ Web dashboard — FastAPI im Brain-Service (`http://localhost:8765`): Live-Agentenkarten (Position, Inventar, Intent/Reason, Council-Auftrag), Dorf-Chest, Chronik, Siedlungsstatus, filterbarer Ereignis-Feed (via Logging-Ringpuffer, null invasive Änderungen), LLM-Token-Zähler; Auto-Refresh alle 2s
 25. 🔲 Configuration system (YAML/JSON)
 26. 🟡 Debug logging (comprehensive: NAV tracking, stuck detection, emergency help, action results, inventory snapshots)
 27. 🔲 Performance optimization
