@@ -178,10 +178,46 @@ class ValisAgent:
         except Exception as e:
             logger.warning(f"CULTURE: belief save failed for {self.name}: {e}")
 
+    # Markers of navel-gazing beliefs: about the agent's own cognition/process
+    # rather than the world. Last session culture went meta ("I notice that I am
+    # adopting similar task-decomposition") — worthless to share, so gate them out.
+    _META_BELIEF_MARKERS = (
+        "i notice that i", "i realize that i", "i am adopting", "i'm adopting",
+        "task-decomposition", "task decomposition", "prompt", "conviction",
+        "my recent actions", "repeatedly attempt", "adopting a", "my approach to",
+        "my behavior", "my decision", "reflecting", "my own",
+    )
+
+    def _is_meta_belief(self, text: str) -> bool:
+        low = text.lower()
+        return any(m in low for m in self._META_BELIEF_MARKERS)
+
+    @staticmethod
+    def _word_overlap(a: str, b: str) -> float:
+        """Cheap textual similarity (Jaccard over content words) — no LLM/embedding."""
+        import re as _re
+        stop = {"i", "that", "the", "a", "to", "of", "and", "is", "in", "it", "my",
+                "have", "learned", "for", "on", "with", "can", "be", "are", "this"}
+        def _toks(s):
+            return {w for w in _re.findall(r'[a-z0-9]+', s.lower())
+                    if w not in stop and len(w) > 2}
+        wa, wb = _toks(a), _toks(b)
+        if not wa or not wb:
+            return 0.0
+        return len(wa & wb) / len(wa | wb)
+
     def adopt_belief(self, text: str, source: str, importance: float = 0.6):
         """Add a conviction (max 3 — the weakest gets replaced)."""
         text = " ".join(str(text).split())[:200]
         if not text or any(b["text"] == text for b in self.beliefs):
+            return
+        # Reject navel-gazing convictions — they clog culture and teach nothing
+        if self._is_meta_belief(text):
+            logger.debug(f"CULTURE: {self.name} rejected meta belief: {text[:60]}")
+            return
+        # Reject near-duplicates of what we already hold (cheap word overlap)
+        if any(self._word_overlap(text, b["text"]) > 0.6 for b in self.beliefs):
+            logger.debug(f"CULTURE: {self.name} rejected redundant belief: {text[:60]}")
             return
         self.beliefs.append({"text": text, "source": source, "importance": importance})
         self.beliefs.sort(key=lambda b: -b["importance"])
@@ -195,7 +231,19 @@ class ValisAgent:
 
     async def _consider_belief_adoption(self, sender: str, statement: str):
         """LLM decides whether a heard conviction resonates enough to adopt.
-        PIANO-pure: hearing is mechanical, adoption is a cognitive decision."""
+        PIANO-pure: hearing is mechanical, adoption is a cognitive decision.
+        Guarded by cheap pre-filters so the LLM call fires rarely (last session
+        this path alone was 284 calls / 14% of the budget)."""
+        import time as _t
+        # Rate limit: at most one adoption every 10 minutes per agent
+        if _t.time() - getattr(self, '_last_adoption_time', 0) < 600:
+            return
+        # Skip meta statements and things too close to what we already believe —
+        # BEFORE spending an LLM call on the decision
+        if self._is_meta_belief(statement):
+            return
+        if any(self._word_overlap(statement, b["text"]) > 0.5 for b in self.beliefs):
+            return
         try:
             own = "; ".join(b["text"][:80] for b in self.beliefs) or "none yet"
             response = await self.llm.chat([
@@ -211,13 +259,16 @@ class ValisAgent:
                             f"adopt it as your own conviction?"},
             ])
             if response.strip().upper().startswith("YES"):
+                before = len(self.beliefs)
                 self.adopt_belief(statement, source=f"adopted from {sender}",
                                   importance=0.55)
-                await self.memory.add_event(
-                    content=f"[Culture] I adopted a conviction from {sender}: {statement}",
-                    importance=0.7,
-                    subject=self.name, predicate="adopted belief from", object=sender,
-                )
+                if len(self.beliefs) > before or any(b["text"] == " ".join(statement.split())[:200] for b in self.beliefs):
+                    self._last_adoption_time = _t.time()
+                    await self.memory.add_event(
+                        content=f"[Culture] I adopted a conviction from {sender}: {statement}",
+                        importance=0.7,
+                        subject=self.name, predicate="adopted belief from", object=sender,
+                    )
         except Exception as e:
             logger.debug(f"CULTURE: belief adoption check failed: {e}")
 
@@ -2199,7 +2250,7 @@ Output ONLY a JSON array of block placements, sorted bottom-up:
                 # One LLM call, rate-limited to every ~2 minutes per agent.
                 import time as _t_cult
                 if (getattr(self, '_belief_candidates', None)
-                        and _t_cult.time() - getattr(self, '_last_belief_check', 0) > 120):
+                        and _t_cult.time() - getattr(self, '_last_belief_check', 0) > 240):
                     self._last_belief_check = _t_cult.time()
                     _cand_sender, _cand_text = self._belief_candidates.pop(0)
                     self._belief_candidates = self._belief_candidates[-3:]
