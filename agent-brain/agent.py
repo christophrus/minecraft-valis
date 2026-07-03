@@ -147,10 +147,34 @@ class ValisAgent:
         self._council_tick: int = 0
 
         # Personal convictions — the atoms of culture. Formed by own reflections,
-        # adoptable from other agents' chat (with attribution).
+        # adoptable from other agents' chat (with attribution). Persisted per
+        # agent so a villager's worldview survives restarts, like the chronicle.
         self.beliefs: list[dict] = []  # {"text", "source", "importance"}
+        self._beliefs_path = os.path.join(config.data_dir, config.name, "beliefs.json")
+        self._load_beliefs()
 
         logger.info(f"Agent created: {self.name} ({self.personality}) [{self.agent_id}]")
+
+    def _load_beliefs(self):
+        import json
+        try:
+            with open(self._beliefs_path, "r", encoding="utf-8") as f:
+                self.beliefs = json.load(f)[:3]
+            if self.beliefs:
+                logger.info(f"CULTURE: {self.name} restored {len(self.beliefs)} conviction(s)")
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            logger.warning(f"CULTURE: belief load failed for {self.name}: {e}")
+
+    def _save_beliefs(self):
+        import json
+        try:
+            os.makedirs(os.path.dirname(self._beliefs_path), exist_ok=True)
+            with open(self._beliefs_path, "w", encoding="utf-8") as f:
+                json.dump(self.beliefs, f, indent=1)
+        except Exception as e:
+            logger.warning(f"CULTURE: belief save failed for {self.name}: {e}")
 
     def adopt_belief(self, text: str, source: str, importance: float = 0.6):
         """Add a conviction (max 3 — the weakest gets replaced)."""
@@ -165,6 +189,7 @@ class ValisAgent:
         logger.info(f"CULTURE: {self.name} {origin} belief: {text[:90]}")
         if dropped:
             logger.debug(f"CULTURE: {self.name} outgrew belief: {dropped[0]['text'][:60]}")
+        self._save_beliefs()
 
     async def _consider_belief_adoption(self, sender: str, statement: str):
         """LLM decides whether a heard conviction resonates enough to adopt.
@@ -2152,13 +2177,17 @@ Output ONLY a JSON array of block placements, sorted bottom-up:
                             if self.settlement:
                                 self.settlement.parse_chat_request(
                                     _sender, _chat_match.group(2))
-                            # Cultural transmission: conviction-like statements
-                            # become adoption candidates (LLM decides later)
+                            # Cultural transmission: value-laden statements become
+                            # adoption candidates (LLM decides later). Broadened from
+                            # literal "I believe" to any conviction/lesson/should-phrasing,
+                            # since agents rarely quote themselves verbatim.
                             _text = _chat_match.group(2)
                             if _re_chat.search(
-                                    r"i believe|i've learned|i think we should|"
-                                    r"our village should|always remember", _text,
-                                    _re_chat.IGNORECASE):
+                                    r"i believe|i've learned|i learned|i've found|"
+                                    r"i think|we should|our village should|the village should|"
+                                    r"always |never |it'?s best to|the key is|"
+                                    r"what matters|i'm convinced|lesson", _text,
+                                    _re_chat.IGNORECASE) and len(_text) > 15:
                                 if not hasattr(self, '_belief_candidates'):
                                     self._belief_candidates: list[tuple[str, str]] = []
                                 self._belief_candidates.append((_sender, _text[:200]))

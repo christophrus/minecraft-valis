@@ -133,7 +133,11 @@ class CognitiveController:
         if beliefs:
             belief_lines = "; ".join(b["text"][:100] for b in beliefs[:3])
             personality_block += (
-                f"YOUR CONVICTIONS (let them shape your choices and words): {belief_lines}\n"
+                f"YOUR CONVICTIONS: {belief_lines}\n"
+                f"Let these shape your choices. Occasionally SHARE one aloud via "
+                f"chat_hint (phrased as your own belief, e.g. \"I've learned that...\") "
+                f"so fellow villagers can learn from you — this is how the village's "
+                f"shared wisdom grows.\n"
             )
 
         # Settlement context — shared village state (neutral info, LLM decides)
