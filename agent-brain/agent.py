@@ -13,7 +13,9 @@ The agent runs a cognitive loop: perceive → retrieve → plan → reflect → 
 import asyncio
 import logging
 import os
+import time
 import uuid
+from datetime import datetime
 from dataclasses import dataclass, field
 
 try:
@@ -2558,6 +2560,9 @@ class AgentManager:
         self.settlement = Settlement()
         self._council_tick: int = 0
         self._council_running: bool = False
+        self._metrics: dict = {"trades_closed": 0}
+        self._metrics_path = os.path.join(
+            "data", f"metrics-{datetime.now().strftime('%Y%m%d-%H%M%S')}.jsonl")
 
     def set_bridge(self, bridge):
         """Set the WebSocket bridge for agent communication."""
@@ -2978,7 +2983,129 @@ Output ONLY a JSON object mapping agent names to task strings:
                 self._council_tick = 0
                 asyncio.create_task(self.run_village_council())
 
+            # Trade matching — settle complementary offers between co-located agents
+            self._trade_tick = getattr(self, '_trade_tick', 0) + 1
+            if self._trade_tick >= 10 and len(self.agents) >= 2:
+                self._trade_tick = 0
+                await self.run_trade_matching()
+
+            # Metrics — periodic snapshot to metrics.jsonl
+            self._metrics_tick = getattr(self, '_metrics_tick', 0) + 1
+            if self._metrics_tick >= 50:
+                self._metrics_tick = 0
+                self._emit_metrics()
+
             await asyncio.sleep(0.1)  # Small delay to prevent busy-loop
+
+    async def run_trade_matching(self):
+        """Settle trades between co-located agents with complementary offers.
+
+        Fixes the broken last mile: the give hint required pixel-adjacency in
+        perception and never fired (0 trades in 3 sessions). Here the settlement
+        matches an offer "A gives X for Y" against a partner B who is near the
+        centre and actually holds Y, then executes BOTH handoffs directly via
+        give_item (which resolves agents by name, not perception). A real,
+        reciprocal transaction — the village's first economy.
+        """
+        s = self.settlement
+        if not s or not s.center or not self._bridge:
+            return
+        import time as _t
+        s.pending_trades = [t for t in s.pending_trades if _t.time() - t.get("time", 0) < 300]
+        if not s.pending_trades:
+            return
+        cx, cy, cz = s.center
+
+        def _near_center(agent) -> bool:
+            p = agent._pending_perception
+            if not p:
+                return False
+            pos = p.position
+            import math
+            return math.sqrt((pos.get("x", 0) - cx) ** 2 + (pos.get("z", 0) - cz) ** 2) <= 12
+
+        for offer in list(s.pending_trades):
+            giver = self.agents.get(offer.get("from", ""))
+            if not giver or not _near_center(giver):
+                continue
+            gives, gives_n = offer["gives"], offer.get("gives_amount", 5)
+            wants, wants_n = offer["wants"], offer.get("wants_amount", 5)
+            ginv = giver._pending_perception.inventory if giver._pending_perception else {}
+            if ginv.get(gives, 0) < 1:  # giver no longer has the goods
+                continue
+            # Find a partner near the centre who holds what the giver wants
+            for pname, partner in self.agents.items():
+                if pname == giver.name or not _near_center(partner):
+                    continue
+                pinv = partner._pending_perception.inventory if partner._pending_perception else {}
+                if pinv.get(wants, 0) < 1:
+                    continue
+                give_amt = min(gives_n, ginv.get(gives, 0))
+                want_amt = min(wants_n, pinv.get(wants, 0))
+                if give_amt < 1 or want_amt < 1:
+                    continue
+                # Execute the reciprocal handoff
+                await self._bridge.send({"type": "agent_action", "name": giver.name,
+                    "action": "give_item",
+                    "params": {"target": pname, "item": gives, "amount": give_amt}})
+                await self._bridge.send({"type": "agent_action", "name": pname,
+                    "action": "give_item",
+                    "params": {"target": giver.name, "item": wants, "amount": want_amt}})
+                s.append_chronicle(
+                    f"{giver.name} traded {give_amt}x {gives} to {pname} for "
+                    f"{want_amt}x {wants} — the village's economy at work.")
+                logger.info(f"TRADE: {giver.name} {give_amt}x {gives} <-> {want_amt}x {wants} {pname}")
+                s.pending_trades.remove(offer)
+                self._metrics.setdefault("trades_closed", 0)
+                self._metrics["trades_closed"] += 1
+                break
+
+    def _emit_metrics(self):
+        """Append a metrics snapshot to data/metrics.jsonl — makes emergence
+        measurable instead of buried in 30k log lines."""
+        import json, time as _t, os as _os
+        s = self.settlement
+        # Aggregate live state from agents' latest perceptions
+        deepest_y = 999
+        total_ingots = 0
+        all_beliefs: list[str] = []
+        for a in self.agents.values():
+            p = a._pending_perception
+            if p:
+                deepest_y = min(deepest_y, int(p.position.get("y", 999)))
+                for k, v in p.inventory.items():
+                    if k.endswith("_ingot"):
+                        total_ingots += v
+            all_beliefs += [b["text"] for b in getattr(a, "beliefs", [])]
+        # Belief diversity = unique / total (1.0 = all distinct, low = homogenized)
+        diversity = (len(set(all_beliefs)) / len(all_beliefs)) if all_beliefs else 1.0
+        try:
+            from llm.providers import get_session_token_totals
+            calls = get_session_token_totals().get("calls", 0)
+        except Exception:
+            calls = 0
+        snap = {
+            "t": time.strftime("%H:%M:%S"),
+            "population": len(self.agents),
+            "shelters": s.shelters_built if s else 0,
+            "chest_items": sum((s.village_chest or {}).values()) if s else 0,
+            "ingots_carried": total_ingots,
+            "deepest_y": deepest_y if deepest_y != 999 else None,
+            "beliefs_total": len(all_beliefs),
+            "belief_diversity": round(diversity, 2),
+            "trades_closed": self._metrics.get("trades_closed", 0),
+            "rules": len(s.rules) if s else 0,
+            "llm_calls": calls,
+        }
+        try:
+            with open(self._metrics_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(snap) + "\n")
+        except Exception as e:
+            logger.debug(f"METRICS: write failed: {e}")
+        logger.info(f"METRICS: pop={snap['population']} shelters={snap['shelters']} "
+                    f"ingots={snap['ingots_carried']} deepestY={snap['deepest_y']} "
+                    f"beliefs={snap['beliefs_total']}(div={snap['belief_diversity']}) "
+                    f"trades={snap['trades_closed']} calls={snap['llm_calls']}")
 
     def get_agent_count(self) -> int:
         return len(self.agents)
