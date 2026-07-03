@@ -311,6 +311,11 @@ During Phase 2/3 implementation, several unplanned but necessary features were a
 | **Market Day** | Council ruft Markttag aus → alle sammeln sich am Zentrum, offene Angebote + Nähe → Handel schließt ab | Economy / Collective Rules (Sid) |
 | **Batched Reflection** | 1 strukturierter Call statt 7; Novelty per Embedding-Cosinus statt LLM (~41%→~9% der Calls) | Efficiency |
 | **Single Decision Path** | Controller-Intent direkt in Aktion gemappt; Planner-LLM nur bei Mehrdeutigkeit (~halbe Entscheidungskosten) | Efficiency |
+| **Trade Matcher** | Settlement paart komplementäre Angebote co-lokaler Agenten, führt beidseitige give_item aus — erste echte Transaktion | Economy (Sid) |
+| **Mobile Furnace** | dig_shaft platziert Ofen am Schachtgrund; Erz wird verhüttet wo es entsteht (schließt raw_iron→ingot-Lücke) | Skill Execution |
+| **Culture Governance** | Meta/selbstbezügliche Beliefs gefiltert, Dedup, Adoption ratelimitiert (~284→~40 Calls) | Cultural Transmission |
+| **Haul Reflex** | Perception weist Fracht den Weg (Roherz→Ofen, Überschuss→Chest) — behebt die Last-Mile-Übergabe | Skill Execution |
+| **Metrics Layer** | `metrics-<ts>.jsonl`: Ingots, Trades, Belief-Diversität, tiefste Y, Calls — Emergenz messbar | Observability |
 
 ## Excluded Scope (Future)
 
