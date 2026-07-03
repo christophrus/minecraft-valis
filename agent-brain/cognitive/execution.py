@@ -116,6 +116,8 @@ class Executor:
                 elif action_name == "till" and len(parts) >= 3:
                     params = {"x": _parse_num(parts[0]), "y": _parse_num(parts[1]),
                               "z": _parse_num(parts[2])}
+                elif action_name in ("dig_shaft", "dig_down", "mine_shaft") and len(parts) >= 1:
+                    params = {"target_y": _parse_num(parts[0])}
                 elif action_name in ("give_item", "give") and len(parts) >= 3:
                     params = {"target": parts[0].strip(), "item": parts[1].strip(),
                               "amount": _parse_num(parts[2]) if len(parts) > 2 else 1}
@@ -160,6 +162,9 @@ class Executor:
             "smelt": "smelt",
             "cook": "smelt",
             "till": "till",
+            "dig_shaft": "dig_shaft",
+            "dig_down": "dig_shaft",
+            "mine_shaft": "dig_shaft",
         }
 
         mapped_action = action_map.get(action_name)

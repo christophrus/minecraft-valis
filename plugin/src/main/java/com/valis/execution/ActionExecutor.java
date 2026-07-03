@@ -49,6 +49,7 @@ public class ActionExecutor {
                 case "craft" -> craft(params);
                 case "smelt" -> smelt(params);
                 case "till" -> till(params);
+                case "dig_shaft" -> digShaft(params);
                 case "equip" -> equip(params);
                 case "look_at" -> lookAt(params);
                 case "chat" -> chat(params);
@@ -797,6 +798,106 @@ public class ActionExecutor {
         block.setType(Material.FARMLAND);
         plugin.getWsBridge().sendActionResult(agent.getAgentName(), "till",
                 true, "tilled farmland at " + x + "," + y + "," + z);
+    }
+
+    /**
+     * Dig a safe descending staircase to a target Y (for reaching iron/diamond
+     * depth). Breaks a 1-wide walkable stair (block + headroom per step),
+     * collects drops, places a torch every few steps, and stops on hazards
+     * (water/lava/bedrock) or when the target depth is reached. Requires a
+     * pickaxe. Bounded per call so it can't run away.
+     */
+    private void digShaft(JsonObject params) {
+        int targetY = params.has("target_y") ? params.get("target_y").getAsInt()
+                : (params.has("y") ? (int) params.get("y").getAsDouble() : 30);
+
+        boolean hasPickaxe = agent.getInventory().keySet().stream().anyMatch(k -> k.endsWith("_pickaxe"));
+        if (!hasPickaxe) {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "dig_shaft",
+                    false, "need a pickaxe to dig a shaft");
+            return;
+        }
+
+        Location loc = agent.getLocation();
+        World world = loc.getWorld();
+        if (world == null) return;
+        int x = loc.getBlockX(), y = loc.getBlockY(), z = loc.getBlockZ();
+        targetY = Math.max(targetY, world.getMinHeight() + 5);
+        if (targetY >= y) {
+            plugin.getWsBridge().sendActionResult(agent.getAgentName(), "dig_shaft",
+                    false, "target depth y=" + targetY + " is not below you (y=" + y + ")");
+            return;
+        }
+
+        int maxSteps = 48;  // bounded per call
+        int torchEvery = 5;
+        int torches = agent.getInventory().getOrDefault("torch", 0);
+        int mined = 0;
+        int dirX = 1;  // staircase advances +X as it descends
+        String stopReason = "reached target depth";
+
+        for (int step = 0; step < maxSteps && y > targetY; step++) {
+            int nx = x + dirX;
+            // Break the step block and the headroom block above it
+            Block stepBlock = world.getBlockAt(nx, y - 1, z);
+            Block headBlock = world.getBlockAt(nx, y, z);
+            Block aboveHead = world.getBlockAt(nx, y + 1, z);
+
+            // Hazard checks before breaking
+            for (Block b : new Block[]{stepBlock, headBlock, aboveHead}) {
+                Material m = b.getType();
+                if (m == Material.WATER || m == Material.LAVA) {
+                    stopReason = "stopped at " + m.name().toLowerCase();
+                    y = targetY; // break outer loop
+                    break;
+                }
+                if (m == Material.BEDROCK) {
+                    stopReason = "hit bedrock";
+                    y = targetY;
+                    break;
+                }
+            }
+            if (y <= targetY) break;
+
+            for (Block b : new Block[]{headBlock, stepBlock}) {
+                Material m = b.getType();
+                if (m == Material.AIR || m == Material.CAVE_AIR) continue;
+                Material tool = getBestTool(m);
+                var toolStack = tool != null ? new org.bukkit.inventory.ItemStack(tool) : null;
+                var drops = b.getDrops(toolStack);
+                b.breakNaturally();
+                for (var drop : drops) agent.addToInventory(drop.getType(), drop.getAmount());
+                if (drops.isEmpty() && m.isBlock()) agent.addToInventory(m, 1);
+                mined++;
+            }
+
+            // Descend one level along the staircase
+            x = nx;
+            y = y - 1;
+            z = z;
+
+            // Place a torch on the wall periodically for light
+            if (torches > 0 && step % torchEvery == 0) {
+                Block wall = world.getBlockAt(x, y + 1, z + 1);
+                if (wall.getType() == Material.AIR || wall.getType() == Material.CAVE_AIR) {
+                    wall.setType(Material.TORCH);
+                    agent.removeFromInventory("torch", 1);
+                    torches--;
+                }
+            }
+        }
+
+        // Move the NPC to the bottom of the shaft
+        NPC npc = agent.getNpc();
+        if (npc != null && npc.isSpawned()) {
+            npc.teleport(new Location(world, x + 0.5, y, z + 0.5),
+                    PlayerTeleportEvent.TeleportCause.PLUGIN);
+            if (npc.getNavigator().isNavigating()) npc.getNavigator().cancelNavigation();
+        }
+
+        plugin.getWsBridge().sendActionResult(agent.getAgentName(), "dig_shaft",
+                true, "dug shaft to y=" + y + " (" + mined + " blocks, " + stopReason
+                + "); now at " + x + "," + y + "," + z);
     }
 
     private void depositChest(JsonObject params) {

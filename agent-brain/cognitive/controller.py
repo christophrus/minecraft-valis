@@ -205,12 +205,13 @@ RELEVANT MEMORIES (weighted by importance+recency+relevance):
 {reflection_text}
 {discrepancy_text}
 
-action_hint choices: mine|craft|smelt|place|build|till|move|explore|hunt|socialize|give|deposit|withdraw|rest
+action_hint choices: mine|craft|smelt|place|build|till|dig_shaft|move|explore|hunt|socialize|give|deposit|withdraw|rest
 
 To craft: use action_hint "craft" and specify the item name in intent. Only craft items listed in CAN CRAFT NOW.
 To get missing materials: mine or gather what ALMOST CRAFTABLE shows.
 To smelt ores into ingots (raw_iron→iron_ingot, raw_copper→copper_ingot) or cook food: use action_hint "smelt", specify "smelt [item] [amount]" in intent. Needs a furnace (in inventory or nearby) and coal as fuel.
 To farm: use action_hint "till" with coordinates of dirt/grass in intent to create farmland (needs a hoe). Then place wheat_seeds on the farmland. Mine mature WHEAT to harvest. Craft bread from 3 wheat.
+To reach ores at depth (iron ~y=30-50, diamond ~y=-40): use action_hint "dig_shaft" and put the target Y in intent (e.g. "dig_shaft to y=30"). It digs a safe lit staircase down. Needs a pickaxe. Surface has only coal/copper — real iron requires digging.
 To build a shelter: use action_hint "build". The agent will construct a 3x3 shelter automatically.
 To give items to another agent: use action_hint "give" and specify "give [item] to [AgentName]" in intent. You must be near the target agent.
 To deposit surplus items into the village chest: use action_hint "deposit" and specify "deposit [item] [amount]" in intent. You must be near the settlement center.

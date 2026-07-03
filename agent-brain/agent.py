@@ -1225,6 +1225,15 @@ class ValisAgent:
                                    params={"x": int(t.get("x",px)), "y": int(t.get("y",py)),
                                            "z": int(t.get("z",pz))})
 
+        if hint == "dig_shaft":
+            # Parse target Y from intent ("dig_shaft to y=30", "dig to y=-40")
+            has_pickaxe = any("pickaxe" in k.lower() for k in perception.inventory)
+            ty_match = re.search(r'y\s*=?\s*(-?\d+)', intent, re.IGNORECASE)
+            target_y = int(ty_match.group(1)) if ty_match else 30
+            if has_pickaxe and target_y < py:
+                return AgentAction(agent_name="", action="dig_shaft",
+                                   params={"target_y": target_y})
+
         if hint == "withdraw":
             withdraw_match = re.search(r'withdraw\s+(\w+)\s*(\d+)?', intent, re.IGNORECASE)
             if withdraw_match:
