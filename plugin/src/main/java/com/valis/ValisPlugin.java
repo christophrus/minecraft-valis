@@ -47,6 +47,11 @@ public class ValisPlugin extends JavaPlugin {
     // Village chest — virtual shared storage at settlement center
     private Location villageChestLocation = null;
     private final Map<String, Integer> villageChest = new ConcurrentHashMap<>();
+    // Village workshop — shared furnace + crafting table next to the chest, so
+    // smelting/crafting happen at a physical commons instead of stalling in
+    // individual inventories.
+    private Location villageFurnaceLocation = null;
+    private Location villageCraftingTableLocation = null;
 
     @Override
     public void onEnable() {
@@ -284,6 +289,9 @@ public class ValisPlugin extends JavaPlugin {
 
     public Location getVillageChestLocation() { return villageChestLocation; }
 
+    public Location getVillageFurnaceLocation() { return villageFurnaceLocation; }
+    public Location getVillageCraftingTableLocation() { return villageCraftingTableLocation; }
+
     public void setVillageChestLocation(Location loc) {
         this.villageChestLocation = loc;
         // Place a physical chest block in the world
@@ -292,6 +300,39 @@ public class ValisPlugin extends JavaPlugin {
             block.setType(Material.CHEST);
         }
         log.info("Village chest placed at " + loc.getBlockX() + "," + loc.getBlockY() + "," + loc.getBlockZ());
+        placeVillageWorkshop(loc);
+    }
+
+    /**
+     * Place the shared village workshop (furnace + crafting table) on the two
+     * tiles flanking the chest, each snapped to its own surface. Agents that
+     * come to the chest to deposit are then automatically within range to smelt
+     * (furnace check radius 4) and craft — the ore→furnace→ingot loop closes
+     * without depending on a single agent carrying both ore and furnace.
+     */
+    private void placeVillageWorkshop(Location chest) {
+        var world = chest.getWorld();
+        if (world == null) return;
+        int cx = chest.getBlockX(), cz = chest.getBlockZ();
+
+        int fx = cx + 1, fz = cz;
+        int fy = world.getHighestBlockYAt(fx, fz) + 1;
+        Location furnace = new Location(world, fx, fy, fz);
+        if (furnace.getBlock().getType() != Material.FURNACE) {
+            furnace.getBlock().setType(Material.FURNACE);
+        }
+        this.villageFurnaceLocation = furnace;
+
+        int tx = cx - 1, tz = cz;
+        int ty = world.getHighestBlockYAt(tx, tz) + 1;
+        Location table = new Location(world, tx, ty, tz);
+        if (table.getBlock().getType() != Material.CRAFTING_TABLE) {
+            table.getBlock().setType(Material.CRAFTING_TABLE);
+        }
+        this.villageCraftingTableLocation = table;
+
+        log.info("Village workshop placed: furnace at " + fx + "," + fy + "," + fz
+                + ", crafting table at " + tx + "," + ty + "," + tz);
     }
 
     public void depositToVillageChest(String item, int amount) {

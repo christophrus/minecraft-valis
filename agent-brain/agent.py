@@ -1187,8 +1187,23 @@ class ValisAgent:
                 item = smelt_match.group(1).lower()
                 amount = int(smelt_match.group(2)) if smelt_match.group(2) else 8
                 if perception.inventory.get(item, 0) > 0:
-                    return AgentAction(agent_name="", action="smelt",
-                                       params={"item": item, "amount": amount})
+                    # Furnace access? (own furnace, or a furnace block nearby)
+                    furnace_near = (perception.inventory.get("furnace", 0) >= 1
+                        or any(b.get("type","").upper() in ("FURNACE","BLAST_FURNACE")
+                               and abs(b.get("x",0)-px) <= 4 and abs(b.get("z",0)-pz) <= 4
+                               for b in blocks))
+                    if furnace_near:
+                        return AgentAction(agent_name="", action="smelt",
+                                           params={"item": item, "amount": amount})
+                    # Otherwise walk to the shared village furnace (the workshop)
+                    if self.settlement and self.settlement.furnace_pos:
+                        fx, fy, fz = self.settlement.furnace_pos
+                        if abs(fx - px) <= 3 and abs(fz - pz) <= 3:
+                            return AgentAction(agent_name="", action="smelt",
+                                               params={"item": item, "amount": amount})
+                        logger.debug(f"FAST-PATH: SMELT-NAV to village furnace ({fx},{fy},{fz})")
+                        return AgentAction(agent_name="", action="move_to",
+                                           params={"x": fx, "y": fy, "z": fz})
 
         if hint == "till":
             # Till the coordinates from intent, or the nearest dirt/grass at feet level
@@ -1246,6 +1261,16 @@ class ValisAgent:
             real = (int(cp.get("x", 0)), int(cp.get("y", 64)), int(cp.get("z", 0)))
             if self.settlement.center != real:
                 self.settlement.center = real
+        # Sync shared workshop positions (furnace + crafting table)
+        if self.settlement and perception.village_furnace_pos:
+            fp = perception.village_furnace_pos
+            self.settlement.furnace_pos = (int(fp.get("x", 0)), int(fp.get("y", 0)), int(fp.get("z", 0)))
+        if self.settlement and perception.village_table_pos:
+            tp = perception.village_table_pos
+            table = (int(tp.get("x", 0)), int(tp.get("y", 0)), int(tp.get("z", 0)))
+            self.settlement.furnace_table_pos = table
+            if table not in self.settlement.crafting_tables:
+                self.settlement.crafting_tables.append(table)
         self.perception_processor.update(perception)
         self._pending_perception = perception
         self._perception_event.set()
@@ -2217,6 +2242,9 @@ class Settlement:
         self.chest_placed: bool = False
         self.pending_requests: list[dict] = []  # Chat→Action pipeline
         self.pending_trades: list[dict] = []  # trade offers heard in chat
+        self.furnace_pos: tuple[int, int, int] | None = None  # shared village furnace
+        self.furnace_table_pos: tuple[int, int, int] | None = None  # workshop table
+        self.market_until: float = 0.0  # market day active until this timestamp
         # Village chronicle — persistent history written by the council.
         # Survives restarts; gives the civilization a memory of itself.
         self.chronicle: list[str] = []
@@ -2334,7 +2362,13 @@ class Settlement:
         lines = [f"SETTLEMENT: center ({cx},{cy},{cz}), {self.shelters_built} shelter(s) built."]
         if self.shelters_built == 0:
             lines.append("No shelters yet. Building near the settlement center benefits the whole village.")
-        if self.crafting_tables:
+        # The village workshop — shared furnace + table at the commons. Directing
+        # agents here is what closes the smelt loop: bring ore, smelt at the shared
+        # furnace, no need to carry your own.
+        if self.furnace_pos:
+            fx, fy, fz = self.furnace_pos
+            lines.append(f"VILLAGE WORKSHOP: shared furnace at ({fx},{fy},{fz}) — bring ore + coal here to smelt into ingots. Shared crafting table beside it.")
+        elif self.crafting_tables:
             tbl_strs = [f"({x},{y},{z})" for x, y, z in self.crafting_tables[:3]]
             lines.append(f"Shared crafting tables: {', '.join(tbl_strs)}")
         if agent_pos:

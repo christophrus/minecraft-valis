@@ -33,6 +33,8 @@ class PerceptionData:
     village_chest: dict[str, int] = field(default_factory=dict)  # shared chest contents
     village_chest_distance: int = -1  # distance to village chest, -1 if no chest
     village_chest_pos: dict[str, int] = field(default_factory=dict)  # real chest {x,y,z}
+    village_furnace_pos: dict[str, int] = field(default_factory=dict)  # shared furnace {x,y,z}
+    village_table_pos: dict[str, int] = field(default_factory=dict)  # shared table {x,y,z}
 
     @classmethod
     def from_json(cls, data: dict) -> "PerceptionData":
@@ -56,6 +58,8 @@ class PerceptionData:
             village_chest=data.get("village_chest", {}),
             village_chest_distance=data.get("village_chest_distance", -1),
             village_chest_pos=data.get("village_chest_pos", {}),
+            village_furnace_pos=data.get("village_furnace_pos", {}),
+            village_table_pos=data.get("village_table_pos", {}),
         )
 
 

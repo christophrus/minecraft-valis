@@ -121,6 +121,25 @@ public class WorldObserver {
                 chestPos.addProperty("y", cl.getBlockY());
                 chestPos.addProperty("z", cl.getBlockZ());
                 report.add("village_chest_pos", chestPos);
+
+                // Village workshop — shared furnace + crafting table positions so
+                // agents can walk to them to smelt/craft at the commons.
+                var furnaceLoc = plugin.getVillageFurnaceLocation();
+                if (furnaceLoc != null) {
+                    JsonObject fp = new JsonObject();
+                    fp.addProperty("x", furnaceLoc.getBlockX());
+                    fp.addProperty("y", furnaceLoc.getBlockY());
+                    fp.addProperty("z", furnaceLoc.getBlockZ());
+                    report.add("village_furnace_pos", fp);
+                }
+                var tableLoc = plugin.getVillageCraftingTableLocation();
+                if (tableLoc != null) {
+                    JsonObject tp = new JsonObject();
+                    tp.addProperty("x", tableLoc.getBlockX());
+                    tp.addProperty("y", tableLoc.getBlockY());
+                    tp.addProperty("z", tableLoc.getBlockZ());
+                    report.add("village_table_pos", tp);
+                }
             }
         }
 
