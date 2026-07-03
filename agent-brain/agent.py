@@ -1943,27 +1943,20 @@ Output ONLY a JSON array of block placements, sorted bottom-up:
             if parsed is None and decision.action_hint == "build" and not self._build_queue:
                 parsed = self._try_start_build(decision, perception)
 
-            # --- Fast-path: craft hint, danger, stuck, AND fast-ticks (FIX A) ---
+            # --- Single decision path: the controller already produced intent +
+            # coordinates + hint, so map that straight to an action here. This runs
+            # on EVERY tick now (was gated behind fast-path conditions), which lets
+            # us skip the redundant second planner LLM call whenever the heuristic
+            # can resolve the controller's intent — the planner becomes a genuine
+            # fallback for ambiguity only. Roughly halves per-decision LLM cost.
             if parsed is None:
-                _stuck_list = getattr(self, '_stuck_positions', [])
-                _actually_stuck = (len(_stuck_list) >= 5 and len(set(_stuck_list[-5:])) == 1)
-                use_fast_path = (
-                    decision.action_hint in ("craft",)
-                    or (decision.priority >= 0.9 and decision.action_hint in ("attack", "flee"))
-                    or _actually_stuck
-                    # FIX A: on action-result-driven ticks, continue the sequence with the
-                    # heuristic instead of waiting 5-20s for the planner LLM. The LLM still
-                    # runs on normal perception ticks, preserving LLM-driven direction.
-                    or is_fast_tick
-                )
-                if use_fast_path:
-                    parsed = self._decision_to_action(decision, perception)
-                    if parsed:
-                        logger.debug(f"FAST-PATH: priority={decision.priority:.2f} hint={decision.action_hint} fast_tick={is_fast_tick} → {parsed.action}")
+                parsed = self._decision_to_action(decision, perception)
+                if parsed:
+                    logger.debug(f"DECISION-PATH: hint={decision.action_hint} p={decision.priority:.2f} fast_tick={is_fast_tick} → {parsed.action}")
 
             if parsed is None and not is_fast_tick:
-                # Primary path: LLM action decision informed by plan + retrieval
-                # Skip on fast-ticks — the LLM call takes 5-20s and defeats the purpose
+                # Fallback: the heuristic couldn't resolve the intent (genuine
+                # ambiguity) — ask the planner LLM. Skipped on fast-ticks.
                 logger.debug(f"LLM-PATH: calling planner.decide_action() (priority={decision.priority:.2f}, hint={decision.action_hint})")
                 action_str = await self.planner.decide_action(self)
                 logger.debug(f"LLM-PATH: returned '{action_str[:200]}'")
