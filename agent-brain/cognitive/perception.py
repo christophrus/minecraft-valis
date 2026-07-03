@@ -119,6 +119,32 @@ class PerceptionProcessor:
         else:
             lines.append("Inventory: empty.")
 
+        # HAUL guidance — the value chain kept breaking at the last mile: raw ore
+        # accumulated far from any furnace, surplus never reached the chest. Tell
+        # the agent explicitly where its cargo should go so the LLM can act on it.
+        raw_ore = sum(v for k, v in real_inv.items() if k.startswith("raw_"))
+        near_furnace = (real_inv.get("furnace", 0) >= 1
+            or any(b.get("type", "").upper() in ("FURNACE", "BLAST_FURNACE")
+                   and abs(b.get("x", 0) - p.position.get("x", 0)) <= 4
+                   and abs(b.get("z", 0) - p.position.get("z", 0)) <= 4
+                   for b in p.nearby_blocks))
+        if raw_ore >= 3 and not near_furnace:
+            if p.village_furnace_pos:
+                fp = p.village_furnace_pos
+                lines.append(f"HAUL: you carry {raw_ore} raw ore — take it to the "
+                             f"furnace at ({fp.get('x')},{fp.get('y')},{fp.get('z')}) "
+                             f"(action_hint smelt) to turn it into ingots.")
+            else:
+                lines.append(f"HAUL: you carry {raw_ore} raw ore — smelt it at a "
+                             f"furnace (build one from 8 cobblestone) to get ingots.")
+        # Heavy load of depositable surplus → chest
+        total_items = sum(real_inv.values())
+        if total_items >= 40 and p.village_chest_pos:
+            cp = p.village_chest_pos
+            lines.append(f"HAUL: your inventory is heavy ({total_items} items) — "
+                         f"deposit surplus at the village chest "
+                         f"({cp.get('x')},{cp.get('y')},{cp.get('z')}).")
+
         # Craftable items (computed server-side from Bukkit recipes)
         if p.craftable:
             craft_strs = []
