@@ -895,8 +895,30 @@ public class ActionExecutor {
             if (npc.getNavigator().isNavigating()) npc.getNavigator().cancelNavigation();
         }
 
+        // Mobile furnace: place a furnace at the shaft bottom if the miner has the
+        // cobblestone (mining a shaft yields plenty). This closes the iron loop —
+        // last session 202 raw_iron produced only 3 ingots because the ore sat at
+        // y=35 while the only furnace was at surface y=79. Smelt where you dig.
+        boolean placedFurnace = false;
+        boolean hasFurnaceInv = agent.getInventory().getOrDefault("furnace", 0) > 0;
+        if (!hasFurnaceInv && agent.getInventory().getOrDefault("cobblestone", 0) >= 8
+                && agent.getInventory().getOrDefault("crafting_table", 0) > 0) {
+            // Craft a furnace from cobblestone (has a table in inventory)
+            agent.removeFromInventory("cobblestone", 8);
+            hasFurnaceInv = true;
+        }
+        if (hasFurnaceInv) {
+            Block spot = world.getBlockAt(x, y, z + 1);
+            if (spot.getType() == Material.AIR || spot.getType() == Material.CAVE_AIR) {
+                spot.setType(Material.FURNACE);
+                agent.removeFromInventory("furnace", 1);
+                placedFurnace = true;
+            }
+        }
+
         plugin.getWsBridge().sendActionResult(agent.getAgentName(), "dig_shaft",
                 true, "dug shaft to y=" + y + " (" + mined + " blocks, " + stopReason
+                + (placedFurnace ? ", placed a furnace here" : "")
                 + "); now at " + x + "," + y + "," + z);
     }
 
