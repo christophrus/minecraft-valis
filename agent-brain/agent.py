@@ -2441,8 +2441,17 @@ class Settlement:
         if self.chronicle:
             lines.append("VILLAGE HISTORY: " + " | ".join(self.chronicle[-2:]))
 
-        # Pending requests from other agents
+        # Market day — a called gathering where trades actually close, because
+        # everyone is at the center at the same time (proximity for give-trades).
         import time as _time
+        if self.market_until > _time.time():
+            mins = int((self.market_until - _time.time()) / 60) + 1
+            lines.append(
+                f"MARKET DAY is active (~{mins} min left)! Go to the village center "
+                f"({cx},{cy},{cz}) NOW to trade. Fulfil open trade offers by moving "
+                f"next to the trader and using 'give'. This is the time to exchange goods.")
+
+        # Pending requests from other agents
         active_requests = [r for r in self.pending_requests
                            if r.get("from") != agent_name
                            and _time.time() - r.get("time", 0) < 300]
@@ -2703,6 +2712,7 @@ RULES:
 - Miner: gather stone/ores. Builder: build shelters/structures. Explorer: scout nearby (max 50 blocks), report back.
 - Also add a "CHRONICLE" key: ONE sentence recording the most notable village development since the last entry (for the village history book). Skip it if nothing noteworthy happened.
 - Optional: if the village faces a recurring coordination problem, you MAY add a "PROPOSAL" key with ONE short village rule to vote on (e.g. "Always deposit surplus ore in the chest before nightfall"). The villagers will vote; a majority adopts it as law. Propose rarely — only when a real problem needs a rule.
+- Optional: if villagers have surplus goods and open trade offers, you MAY add a "MARKET": true key to call a market day — all villagers gather at the center to trade. Call it when there are goods to exchange, not every session.
 {recruit_info}
 
 Output ONLY a JSON object mapping agent names to task strings:
@@ -2734,6 +2744,16 @@ Output ONLY a JSON object mapping agent names to task strings:
                 proposal = assignments.pop("PROPOSAL", None)
                 if proposal and isinstance(proposal, str) and len(self.settlement.rules) < 8:
                     asyncio.create_task(self.run_village_vote(proposal.strip()[:200]))
+
+                # Market day — the council calls all villagers to the center to trade
+                market = assignments.pop("MARKET", None)
+                if market:
+                    import time as _tm
+                    self.settlement.market_until = _tm.time() + 180  # 3 min market
+                    self.settlement.append_chronicle(
+                        "The council called a market day — villagers gathered at the "
+                        "center to trade their surplus goods.")
+                    logger.info("COUNCIL: MARKET DAY declared (villagers gather at center to trade)")
 
                 # Recruitment — the council may grow the village when it thrives
                 recruit = assignments.pop("RECRUIT", None)

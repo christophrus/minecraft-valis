@@ -305,6 +305,12 @@ During Phase 2/3 implementation, several unplanned but necessary features were a
 | **Trade Completion** | Chat-Handelsangebote → explizite Perception-Fakten → Annahme via give | Economy (Sid) |
 | **Infrastruktur-Schutz** | Heuristik-Mining verschont registrierte Tables/Chest/Shelter/Farmen | Settlement Integrity |
 | **Settlement-Persistenz** | Shelter/Tables/Regeln/Center überleben Brain-Neustarts (`settlement_state.json`) | Collective Memory |
+| **Village Workshop** | Geteilter Furnace + Table werden am Zentrum platziert; smelt-Hint navigiert Erzträger zum Dorf-Ofen (schließt ore→furnace→ingot) | Skill Execution / Commons |
+| **dig_shaft** | Sichere beleuchtete Treppe zur Ziel-Tiefe (Fackeln, Wasser/Lava-Stopp) — öffnet Eisen/Diamant-Ebene | Skill Execution (Sid) |
+| **Belief-Persistenz + Voice** | Überzeugungen überleben Neustarts (`beliefs.json`), werden im Chat geteilt, breiter übernommen | Cultural Transmission (Sid) |
+| **Market Day** | Council ruft Markttag aus → alle sammeln sich am Zentrum, offene Angebote + Nähe → Handel schließt ab | Economy / Collective Rules (Sid) |
+| **Batched Reflection** | 1 strukturierter Call statt 7; Novelty per Embedding-Cosinus statt LLM (~41%→~9% der Calls) | Efficiency |
+| **Single Decision Path** | Controller-Intent direkt in Aktion gemappt; Planner-LLM nur bei Mehrdeutigkeit (~halbe Entscheidungskosten) | Efficiency |
 
 ## Excluded Scope (Future)
 

@@ -106,6 +106,7 @@
   <span class="stat">Shelter <b id="shelters">–</b></span>
   <span class="stat">LLM <b id="llm">–</b></span>
   <span class="stat">Stand <b id="timestamp">–</b></span>
+  <span class="stat" id="market-badge" style="display:none;background:#3d2f13;color:var(--amber);padding:1px 8px;border-radius:10px;">🛒 Markttag aktiv</span>
 </header>
 
 <div class="grid">
@@ -284,6 +285,7 @@ function render(s) {
     const mt = ((s.llm.prompt_tokens + s.llm.completion_tokens) / 1e6).toFixed(2);
     document.getElementById("llm").textContent = `${mt} MTok / ${s.llm.calls} Calls`;
   }
+  document.getElementById("market-badge").style.display = s.settlement.market_active ? "" : "none";
   renderAgents(s.agents);
   renderFeed(s.events);
   renderMap(s);

@@ -92,6 +92,8 @@ def build_state(manager) -> dict:
         "chest": dict(s.village_chest),
         "chronicle": list(s.chronicle),
         "rules": list(getattr(s, "rules", [])),
+        "market_active": getattr(s, "market_until", 0) > time.time(),
+        "furnace": list(s.furnace_pos) if getattr(s, "furnace_pos", None) else None,
         "pending_requests": [
             {"from": r.get("from", "?"), "item": r.get("item", "?")}
             for r in s.pending_requests
