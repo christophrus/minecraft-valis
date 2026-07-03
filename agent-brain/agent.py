@@ -208,8 +208,17 @@ class ValisAgent:
 
     def adopt_belief(self, text: str, source: str, importance: float = 0.6):
         """Add a conviction (max 3 — the weakest gets replaced)."""
+        import time as _t
         text = " ".join(str(text).split())[:200]
         if not text or any(b["text"] == text for b in self.beliefs):
+            return
+        # Formation rate limit — a worldview changes slowly. Without this the
+        # 3 slots rotated ~20x per agent-hour (924 formations in one session):
+        # diversity looked perfect while convictions were pure noise. Applies
+        # to own reflections AND adoptions alike.
+        if (len(self.beliefs) >= 3
+                and _t.time() - getattr(self, '_last_belief_change', 0) < 600):
+            logger.debug(f"CULTURE: {self.name} belief change rate-limited: {text[:60]}")
             return
         # Reject navel-gazing convictions — they clog culture and teach nothing
         if self._is_meta_belief(text):
@@ -219,6 +228,7 @@ class ValisAgent:
         if any(self._word_overlap(text, b["text"]) > 0.6 for b in self.beliefs):
             logger.debug(f"CULTURE: {self.name} rejected redundant belief: {text[:60]}")
             return
+        self._last_belief_change = _t.time()
         self.beliefs.append({"text": text, "source": source, "importance": importance})
         self.beliefs.sort(key=lambda b: -b["importance"])
         dropped = self.beliefs[3:]
@@ -235,7 +245,9 @@ class ValisAgent:
         Guarded by cheap pre-filters so the LLM call fires rarely (last session
         this path alone was 284 calls / 14% of the budget)."""
         import time as _t
-        # Rate limit: at most one adoption every 10 minutes per agent
+        # Rate limit COUNTS CALLS, not successes. The previous version only set
+        # the timestamp on YES — every NO answer allowed an immediate retry,
+        # which is how 478 adoption calls happened despite a "10-minute limit".
         if _t.time() - getattr(self, '_last_adoption_time', 0) < 600:
             return
         # Skip meta statements and things too close to what we already believe —
@@ -244,6 +256,7 @@ class ValisAgent:
             return
         if any(self._word_overlap(statement, b["text"]) > 0.5 for b in self.beliefs):
             return
+        self._last_adoption_time = _t.time()  # charge the call itself
         try:
             own = "; ".join(b["text"][:80] for b in self.beliefs) or "none yet"
             response = await self.llm.chat([
@@ -257,7 +270,7 @@ class ValisAgent:
                             f"{sender} said: \"{statement}\"\n"
                             f"Does this idea resonate with who you are — enough to "
                             f"adopt it as your own conviction?"},
-            ])
+            ], max_tokens=150)
             if response.strip().upper().startswith("YES"):
                 before = len(self.beliefs)
                 self.adopt_belief(statement, source=f"adopted from {sender}",
@@ -414,7 +427,22 @@ class ValisAgent:
         # Tech-tree progression. Order matters: keep a plank buffer (>=6) so we never
         # deadlock at exactly 4 planks (where the only affordable craft was a 2nd table).
         craft_action = None
-        if total_logs >= 1 and total_planks < 6:
+        # Iron tier FIRST — the top of the tech tree. Last session 3 iron_ingots
+        # stranded in the chest because the cascade ended at stone; if we carry
+        # ingots, turn them into tools immediately.
+        if (inv.get("iron_ingot", 0) >= 3 and total_sticks >= 2
+                and has_crafting_table_nearby
+                and inv.get("iron_pickaxe", 0) == 0):
+            if "iron_pickaxe" not in self._recently_crafted:
+                craft_action = AgentAction(agent_name="", action="craft", params={"item": "iron_pickaxe"})
+                logger.debug(f"FAST-CRAFT: pre-emptive CRAFT iron_pickaxe (ingots={inv.get('iron_ingot',0)})")
+        elif (inv.get("iron_ingot", 0) >= 2 and total_sticks >= 1
+                and has_crafting_table_nearby
+                and inv.get("iron_sword", 0) == 0 and inv.get("iron_pickaxe", 0) >= 1):
+            if "iron_sword" not in self._recently_crafted:
+                craft_action = AgentAction(agent_name="", action="craft", params={"item": "iron_sword"})
+                logger.debug(f"FAST-CRAFT: pre-emptive CRAFT iron_sword (ingots={inv.get('iron_ingot',0)})")
+        elif total_logs >= 1 and total_planks < 6:
             best_log = _find_best(all_logs)
             plank_type = best_log.replace("_log", "_planks") if best_log else "oak_planks"
             if plank_type not in self._recently_crafted:
@@ -1509,7 +1537,7 @@ Respond ONLY with valid JSON:
             response = await self.llm.chat([
                 {"role": "system", "content": "You are an emergency escape advisor for a Minecraft AI agent. The agent is stuck. Give ONE direct action to escape. NEVER suggest mining leaves or logs — they don't help. Prefer teleporting to solid ground at y=64-70, or mining blocks at the agent's feet. Output ONLY JSON."},
                 {"role": "user", "content": prompt},
-            ])
+            ], max_tokens=900)
             json_str = response.strip()
             json_str = _re.sub(r'^```(?:json)?\s*', '', json_str)
             json_str = _re.sub(r'\s*```$', '', json_str)
@@ -1665,7 +1693,7 @@ Output ONLY a JSON array of block placements, sorted bottom-up:
             response = await self.llm.chat([
                 {"role": "system", "content": "You are a Minecraft architect. Output only a JSON array."},
                 {"role": "user", "content": prompt},
-            ])
+            ], max_tokens=900)
             json_str = response.strip()
             json_str = re.sub(r'^```(?:json)?\s*', '', json_str)
             json_str = re.sub(r'\s*```$', '', json_str)
@@ -2474,6 +2502,14 @@ class Settlement:
             chest_items = ", ".join(f"{v}x {k}" for k, v in
                 sorted(self.village_chest.items(), key=lambda x: -x[1])[:8])
             lines.append(f"VILLAGE CHEST at center: {chest_items}")
+            # Stranded ingots: 3 iron_ingots sat unused in the chest a whole
+            # session because nobody connected them to the iron tools in their
+            # plans. Make the connection explicit as a neutral fact.
+            ingots = self.village_chest.get("iron_ingot", 0)
+            if ingots >= 3:
+                lines.append(f"The chest holds {ingots}x iron_ingot — enough to craft "
+                             f"an iron_pickaxe (3 ingots + 2 sticks). Withdraw them "
+                             f"at the center to upgrade your tools.")
         elif self.chest_placed:
             lines.append("VILLAGE CHEST at center: empty")
 
@@ -2530,19 +2566,25 @@ class Settlement:
                 f"for {t['wants_amount']}x {t['wants']}. If someone gives you {t['wants']}, "
                 f"give them the promised {t['gives']} in return.")
 
+        # Context diet: with 6+ villagers this block dominated prompt growth
+        # (tokens/call rose 1560→2429 across sessions). Show only the 4 nearest
+        # members, intent trimmed — enough for coordination, cheap per call.
         others = {n: s for n, s in self.agent_status.items()
                   if n != agent_name and _time.time() - s.get("updated", 0) < 120}
         if others:
-            lines.append("VILLAGE MEMBERS STATUS:")
-            for n, s in others.items():
-                role = s["personality"]
-                intent = s["intent"]
-                surplus_str = ", ".join(f"{v}x {k}" for k, v in s["surplus"][:3]) if s["surplus"] else "nothing notable"
+            import math as _m2
+            def _dist_to(s):
                 ox, oy, oz = s["position"]
                 if agent_pos:
-                    import math as _m2
-                    d = _m2.sqrt((agent_pos[0]-ox)**2 + (agent_pos[2]-oz)**2)
-                    lines.append(f"  {n} ({role}, {d:.0f}m away): \"{intent}\" | has: {surplus_str}")
+                    return _m2.sqrt((agent_pos[0]-ox)**2 + (agent_pos[2]-oz)**2)
+                return 0.0
+            lines.append("VILLAGE MEMBERS STATUS:")
+            for n, s in sorted(others.items(), key=lambda kv: _dist_to(kv[1]))[:4]:
+                role = s["personality"]
+                intent = s["intent"][:45]
+                surplus_str = ", ".join(f"{v}x {k}" for k, v in s["surplus"][:2]) if s["surplus"] else "-"
+                if agent_pos:
+                    lines.append(f"  {n} ({role}, {_dist_to(s):.0f}m): \"{intent}\" | has: {surplus_str}")
                 else:
                     lines.append(f"  {n} ({role}): \"{intent}\" | has: {surplus_str}")
 
@@ -2731,6 +2773,17 @@ class AgentManager:
                     f"Village chest: {chest_str}\n"
                     f"Population: {len(self.agents)} villagers (capacity: {MAX_VILLAGERS})."
                 )
+                # Neutral fact: trade needs a trader. Last run the council recruited
+                # two farmers and a guard — nobody ever proposed a trade, so the
+                # whole exchange economy lay dormant. The council decides freely.
+                has_trader = any(a.personality == "trader" for a in self.agents.values())
+                chest_total = sum(s.village_chest.values())
+                if not has_trader and chest_total >= 30:
+                    settlement_info += (
+                        f"\nNote: the chest holds {chest_total} items of surplus, but no "
+                        f"villager currently works as a trader — nobody organizes "
+                        f"exchange or markets."
+                    )
 
             history_info = ""
             if s.chronicle:
@@ -2781,7 +2834,7 @@ Output ONLY a JSON object mapping agent names to task strings:
                 response = await any_agent.llm.chat([
                     {"role": "system", "content": "You are a village planning AI. Output only JSON."},
                     {"role": "user", "content": prompt},
-                ])
+                ], max_tokens=800)
                 json_str = response.strip()
                 json_str = re.sub(r'^```(?:json)?\s*', '', json_str)
                 json_str = re.sub(r'\s*```$', '', json_str)
@@ -2864,7 +2917,7 @@ Output ONLY a JSON object mapping agent names to task strings:
                                     f"Proposed village rule: \"{proposal}\"\n"
                                     f"Existing rules: {'; '.join(self.settlement.rules) or 'none'}\n"
                                     f"Vote YES or NO."},
-                    ])
+                    ], max_tokens=60)
                     vote_yes = response.strip().upper().startswith("YES")
                     votes[name] = vote_yes
                     logger.info(f"VOTE: {name} votes {'YES' if vote_yes else 'NO'} — {response.strip()[:80]}")

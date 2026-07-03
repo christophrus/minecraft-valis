@@ -57,8 +57,14 @@ class LLMProvider(ABC):
         self.config = config
 
     @abstractmethod
-    async def chat(self, messages: list[dict[str, str]]) -> str:
-        """Send a chat completion request and return the response text."""
+    async def chat(self, messages: list[dict[str, str]],
+                   max_tokens: int | None = None) -> str:
+        """Send a chat completion request and return the response text.
+
+        max_tokens caps the completion per call type — the model rambled
+        >1500 output tokens on JSON answers that need ~200 (415 such calls
+        in one session). Falls back to the config default when None.
+        """
         ...
 
     @abstractmethod
@@ -78,7 +84,8 @@ class OpenAIProvider(LLMProvider):
             base_url=config.base_url or None,
         )
 
-    async def chat(self, messages: list[dict[str, str]]) -> str:
+    async def chat(self, messages: list[dict[str, str]],
+                   max_tokens: int | None = None) -> str:
         model = self.config.model or "gpt-4o"
         t0 = time.time()
         # Determine caller context from call stack
@@ -94,7 +101,7 @@ class OpenAIProvider(LLMProvider):
                 model=model,
                 messages=messages,
                 temperature=self.config.temperature,
-                max_tokens=self.config.max_tokens,
+                max_tokens=max_tokens or self.config.max_tokens,
             )
             latency = time.time() - t0
             choice = response.choices[0]
@@ -167,7 +174,8 @@ class AnthropicProvider(LLMProvider):
         import anthropic
         self.client = anthropic.AsyncAnthropic(api_key=config.api_key)
 
-    async def chat(self, messages: list[dict[str, str]]) -> str:
+    async def chat(self, messages: list[dict[str, str]],
+                   max_tokens: int | None = None) -> str:
         model = self.config.model or "claude-sonnet-4-20250514"
         t0 = time.time()
 
@@ -182,7 +190,7 @@ class AnthropicProvider(LLMProvider):
 
         response = await self.client.messages.create(
             model=model,
-            max_tokens=self.config.max_tokens,
+            max_tokens=max_tokens or self.config.max_tokens,
             temperature=self.config.temperature,
             system=system_msg if system_msg else None,
             messages=user_messages,
@@ -229,16 +237,18 @@ class OllamaProvider(LLMProvider):
             timeout=httpx.Timeout(120.0),
         )
 
-    async def chat(self, messages: list[dict[str, str]]) -> str:
+    async def chat(self, messages: list[dict[str, str]],
+                   max_tokens: int | None = None) -> str:
         model = self.config.model or "llama3"
         t0 = time.time()
+        options = {"temperature": self.config.temperature}
+        if max_tokens:
+            options["num_predict"] = max_tokens
         resp = await self.http.post("/api/chat", json={
             "model": model,
             "messages": messages,
             "stream": False,
-            "options": {
-                "temperature": self.config.temperature,
-            },
+            "options": options,
         })
         resp.raise_for_status()
         latency = time.time() - t0

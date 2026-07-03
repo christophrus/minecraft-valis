@@ -90,7 +90,7 @@ Output ONLY the JSON."""
             response = await agent.llm.chat([
                 {"role": "system", "content": "You analyze social interactions. Output only JSON."},
                 {"role": "user", "content": prompt},
-            ])
+            ], max_tokens=200)
 
             import json
             json_str = response.strip()

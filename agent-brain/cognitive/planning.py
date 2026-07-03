@@ -96,13 +96,13 @@ Format:
         response = await agent.llm.chat([
             {"role": "system", "content": "You are an AI agent in Minecraft. Output the structured plan, no preamble."},
             {"role": "user", "content": prompt},
-        ])
+        ], max_tokens=700)
         if not response or not response.strip():
             logger.warning(f"Agent {agent.name} plan LLM returned empty, retrying...")
             response = await agent.llm.chat([
                 {"role": "system", "content": "You MUST output a plan. Format: ## Goal: title, then - sub-tasks."},
                 {"role": "user", "content": prompt},
-            ])
+            ], max_tokens=700)
 
         daily_goals, hourly_tasks = self._parse_hierarchical_plan(response)
 
@@ -248,14 +248,14 @@ Respond with exactly ONE action in format: action_name(param1=value1, param2=val
         response = await agent.llm.chat([
             {"role": "system", "content": "You control a Minecraft agent. Output ONLY the action, nothing else."},
             {"role": "user", "content": prompt},
-        ])
+        ], max_tokens=300)
         # Retry once if empty response
         if not response or not response.strip():
             logger.warning(f"Agent {agent.name} decide_action LLM returned empty, retrying...")
             response = await agent.llm.chat([
                 {"role": "system", "content": "Output EXACTLY one action. Example: move_to(x=10, y=64, z=20). No other text."},
                 {"role": "user", "content": prompt},
-            ])
+            ], max_tokens=300)
 
         return response.strip()
 

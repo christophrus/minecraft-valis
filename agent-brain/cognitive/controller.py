@@ -19,6 +19,34 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("valis.cognitive.controller")
 
+# Static instruction block — byte-identical across ALL agents and ALL ticks so
+# the provider's automatic prefix cache (DeepSeek: cached input ~1/10 price)
+# gets a hit on every controller call. Volatile state goes BELOW this block;
+# anything added above/inside it must never vary per call.
+STATIC_INSTRUCTIONS = """You control an AI villager in Minecraft. Pick ONE action. Be concise — output ONLY JSON, max 300 chars.
+
+action_hint choices: mine|craft|smelt|place|build|till|dig_shaft|move|explore|hunt|socialize|give|deposit|withdraw|rest
+
+To craft: use action_hint "craft" and specify the item name in intent. Only craft items listed in CAN CRAFT NOW.
+To get missing materials: mine or gather what ALMOST CRAFTABLE shows.
+To smelt ores into ingots (raw_iron→iron_ingot, raw_copper→copper_ingot) or cook food: use action_hint "smelt", specify "smelt [item] [amount]" in intent. Needs a furnace (in inventory or nearby) and coal as fuel.
+To farm: use action_hint "till" with coordinates of dirt/grass in intent to create farmland (needs a hoe). Then place wheat_seeds on the farmland. Mine mature WHEAT to harvest. Craft bread from 3 wheat.
+To reach ores at depth (iron ~y=30-50, diamond ~y=-40): use action_hint "dig_shaft" and put the target Y in intent (e.g. "dig_shaft to y=30"). It digs a safe lit staircase down. Needs a pickaxe. Surface has only coal/copper — real iron requires digging.
+To build a shelter: use action_hint "build". The agent will construct a 3x3 shelter automatically.
+To give items to another agent: use action_hint "give" and specify "give [item] to [AgentName]" in intent. You must be near the target agent.
+To deposit surplus items into the village chest: use action_hint "deposit" and specify "deposit [item] [amount]" in intent. You must be near the settlement center.
+To withdraw items from the village chest: use action_hint "withdraw" and specify "withdraw [item] [amount]" in intent. You must be near the settlement center.
+chat_hint: optional short message spoken aloud in Minecraft chat. Other agents and players can hear it. Use it to coordinate, share info, or respond to what you heard. Leave empty if nothing to say.
+
+VILLAGE ECONOMY: The village chest at the settlement center is the shared storage. After gathering resources, RETURN to center and deposit surplus. Before building, check the chest for materials. This loop (gather → return → deposit → repeat) is how the village grows.
+If you have a VILLAGE COUNCIL ASSIGNMENT, follow it — it coordinates the whole village.
+
+Output ONLY JSON:
+{"intent": "what and where", "reason": "why (1 sentence)", "priority": 0-10, "action_hint": "mine|craft|...", "chat_hint": ""}
+
+=== YOUR CHARACTER AND CURRENT STATE ===
+"""
+
 
 @dataclass
 class ControllerDecision:
@@ -184,8 +212,10 @@ class CognitiveController:
         if _assignment:
             council_block = f"VILLAGE COUNCIL ASSIGNMENT: {_assignment}"
 
-        prompt = f"""You control {agent.name}, an AI in Minecraft. Pick ONE action. Be concise — output ONLY JSON, max 300 chars.
-
+        # Prompt order matters for the provider prefix cache: the static block
+        # leads (shared by every call), then the per-agent semi-static identity
+        # (stable for minutes-to-hours), then volatile state last.
+        prompt = STATIC_INSTRUCTIONS + f"""YOU ARE {agent.name}.
 {personality_block}
 {council_block}
 {settlement_block}
@@ -209,24 +239,7 @@ RELEVANT MEMORIES (weighted by importance+recency+relevance):
 {reflection_text}
 {discrepancy_text}
 
-action_hint choices: mine|craft|smelt|place|build|till|dig_shaft|move|explore|hunt|socialize|give|deposit|withdraw|rest
-
-To craft: use action_hint "craft" and specify the item name in intent. Only craft items listed in CAN CRAFT NOW.
-To get missing materials: mine or gather what ALMOST CRAFTABLE shows.
-To smelt ores into ingots (raw_iron→iron_ingot, raw_copper→copper_ingot) or cook food: use action_hint "smelt", specify "smelt [item] [amount]" in intent. Needs a furnace (in inventory or nearby) and coal as fuel.
-To farm: use action_hint "till" with coordinates of dirt/grass in intent to create farmland (needs a hoe). Then place wheat_seeds on the farmland. Mine mature WHEAT to harvest. Craft bread from 3 wheat.
-To reach ores at depth (iron ~y=30-50, diamond ~y=-40): use action_hint "dig_shaft" and put the target Y in intent (e.g. "dig_shaft to y=30"). It digs a safe lit staircase down. Needs a pickaxe. Surface has only coal/copper — real iron requires digging.
-To build a shelter: use action_hint "build". The agent will construct a 3x3 shelter automatically.
-To give items to another agent: use action_hint "give" and specify "give [item] to [AgentName]" in intent. You must be near the target agent.
-To deposit surplus items into the village chest: use action_hint "deposit" and specify "deposit [item] [amount]" in intent. You must be near the settlement center.
-To withdraw items from the village chest: use action_hint "withdraw" and specify "withdraw [item] [amount]" in intent. You must be near the settlement center.
-chat_hint: optional short message spoken aloud in Minecraft chat. Other agents and players can hear it. Use it to coordinate, share info, or respond to what you heard. Leave empty if nothing to say.
-
-VILLAGE ECONOMY: The village chest at the settlement center is the shared storage. After gathering resources, RETURN to center and deposit surplus. Before building, check the chest for materials. This loop (gather → return → deposit → repeat) is how the village grows.
-If you have a VILLAGE COUNCIL ASSIGNMENT, follow it — it coordinates the whole village.
-
-Output ONLY JSON:
-{{"intent": "what and where", "reason": "why (1 sentence)", "priority": 0-10, "action_hint": "mine|craft|...", "chat_hint": ""}}"""
+Decide now. Output ONLY the JSON object."""
 
         import json, re
         decision = None
@@ -236,7 +249,7 @@ Output ONLY JSON:
                 response = await agent.llm.chat([
                     {"role": "system", "content": "You are a decision-making module. Output only JSON."},
                     {"role": "user", "content": prompt},
-                ])
+                ], max_tokens=350)
 
                 # Extract JSON from response (may be wrapped in markdown or have preamble)
                 json_str = response.strip()

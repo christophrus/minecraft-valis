@@ -316,6 +316,12 @@ During Phase 2/3 implementation, several unplanned but necessary features were a
 | **Culture Governance** | Meta/selbstbezügliche Beliefs gefiltert, Dedup, Adoption ratelimitiert (~284→~40 Calls) | Cultural Transmission |
 | **Haul Reflex** | Perception weist Fracht den Weg (Roherz→Ofen, Überschuss→Chest) — behebt die Last-Mile-Übergabe | Skill Execution |
 | **Metrics Layer** | `metrics-<ts>.jsonl`: Ingots, Trades, Belief-Diversität, tiefste Y, Calls — Emergenz messbar | Observability |
+| **Iron-Tier Fast-Craft** | iron_pickaxe/iron_sword an der Kaskaden-Spitze + Chest-Fakt „N ingots — withdraw to craft" (Ingots strandeten im Chest) | Skill Execution |
+| **Trader-Fakt** | Council sieht neutral „Überschuss vorhanden, niemand handelt" — entscheidet selbst über Trader-Rekrutierung | Economy (Sid) |
+| **Kultur-Wurzeldrossel** | Reflection-Threshold 50→100, Belief-Schwelle 0.55→0.7, Formation-Ratelimit 10min (Slots voll), Adoption-Limit zählt Calls | Cultural Transmission |
+| **Output-Caps** | max_tokens pro Call-Typ (Controller 350, Vote 60, Reflection 500 …) — 415 Calls hatten >1500 Output-Tokens | Efficiency |
+| **Cache-stabiler Prompt-Prefix** | Statischer Instruktionsblock (2,4k Zeichen) führt jeden Controller-Prompt an → DeepSeek-Prefix-Cache (~1/10 Preis für Hits) | Efficiency |
+| **Kontext-Diät** | Members-Status auf 4 nächste gekürzt, Intents getrimmt (Tokens/Call waren 1560→2429 gewachsen) | Efficiency |
 
 ## Excluded Scope (Future)
 

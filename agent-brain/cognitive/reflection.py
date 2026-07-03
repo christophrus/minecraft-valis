@@ -27,7 +27,10 @@ class Reflection:
 
     def __init__(self):
         self.importance_counter: float = 0.0
-        self.importance_threshold: float = 50.0  # ~10 high-priority decisions
+        # 50.0 caused a reflection every ~55s per agent (505 in one session) and
+        # a belief churn of ~20 slot changes per agent-hour. Doubled: reflect on
+        # substantial accumulated experience, not on routine.
+        self.importance_threshold: float = 100.0
         self.reflection_count: int = 0
         self.last_reflection_time: float = 0.0
 
@@ -82,7 +85,7 @@ class Reflection:
             response = await agent.llm.chat([
                 {"role": "system", "content": "You reflect and output ONLY a JSON array of new insights."},
                 {"role": "user", "content": prompt},
-            ])
+            ], max_tokens=500)
             js = response.strip()
             js = re.sub(r'^```(?:json)?\s*', '', js)
             js = re.sub(r'\s*```$', '', js)
@@ -128,7 +131,10 @@ class Reflection:
             logger.info(f"REFLECTION: stored insight (imp={importance:.2f}): {insight[:100]}")
             if emb is not None:
                 thought_embeds.append(emb)
-            if importance >= 0.55 and hasattr(agent, "adopt_belief"):
+            # 0.7, not 0.55: the single-call format hands out 6-8/10 generously,
+            # which made nearly every insight a conviction (924 formations/run).
+            # Only genuinely important lessons should shape a personality.
+            if importance >= 0.7 and hasattr(agent, "adopt_belief"):
                 agent.adopt_belief(insight, source="own reflection", importance=importance)
 
         self.importance_counter = 0

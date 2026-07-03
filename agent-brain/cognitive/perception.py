@@ -131,19 +131,23 @@ class PerceptionProcessor:
         if raw_ore >= 3 and not near_furnace:
             if p.village_furnace_pos:
                 fp = p.village_furnace_pos
-                lines.append(f"HAUL: you carry {raw_ore} raw ore — take it to the "
+                haul_line = (f"HAUL: you carry {raw_ore} raw ore — take it to the "
                              f"furnace at ({fp.get('x')},{fp.get('y')},{fp.get('z')}) "
                              f"(action_hint smelt) to turn it into ingots.")
             else:
-                lines.append(f"HAUL: you carry {raw_ore} raw ore — smelt it at a "
+                haul_line = (f"HAUL: you carry {raw_ore} raw ore — smelt it at a "
                              f"furnace (build one from 8 cobblestone) to get ingots.")
+            lines.append(haul_line)
+            logger.debug(f"HAUL-FACT [{p.agent_name}]: {haul_line}")
         # Heavy load of depositable surplus → chest
         total_items = sum(real_inv.values())
         if total_items >= 40 and p.village_chest_pos:
             cp = p.village_chest_pos
-            lines.append(f"HAUL: your inventory is heavy ({total_items} items) — "
+            haul_line = (f"HAUL: your inventory is heavy ({total_items} items) — "
                          f"deposit surplus at the village chest "
                          f"({cp.get('x')},{cp.get('y')},{cp.get('z')}).")
+            lines.append(haul_line)
+            logger.debug(f"HAUL-FACT [{p.agent_name}]: {haul_line}")
 
         # Craftable items (computed server-side from Bukkit recipes)
         if p.craftable:
